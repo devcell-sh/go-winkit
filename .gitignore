@@ -33,3 +33,4 @@ go.work.sum
 # devcell container config
 .devcell/
 .devcell.toml
+.rendered-ps1/
