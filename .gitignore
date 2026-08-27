@@ -1,0 +1,35 @@
+# Binaries and build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/winkit
+/dist/
+
+# Test artifacts
+*.test
+*.out
+coverage.*
+test/results/*
+!test/results/.gitkeep
+
+# Large disk images
+*.qcow2
+*.vhdx
+*.iso
+*.esd
+*.wim
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Editors and tooling
+.idea/
+.vscode/
+.scratch/
+
+# devcell container config
+.devcell/
+.devcell.toml
