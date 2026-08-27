@@ -1,4 +1,4 @@
-package uupdump
+package e2e
 
 import (
 	"context"
@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/devcell-sh/go-wimlib"
+
+	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/uupdump"
 )
 
 func TestFetchWindowsISO_Integration(t *testing.T) {
@@ -27,7 +29,7 @@ func TestFetchWindowsISO_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	isoPath, err := FetchWindowsISO(ctx, FetchConfig{
+	isoPath, err := uupdump.FetchWindowsISO(ctx, uupdump.FetchConfig{
 		CacheDir: cacheDir,
 		Language: "en-us",
 		Edition:  "PROFESSIONAL",
@@ -99,7 +101,7 @@ func TestAssembleISO_WithRealESD(t *testing.T) {
 	workDir := t.TempDir()
 	isoPath := workDir + "/test-output.iso"
 
-	err = AssembleISO(context.Background(), esdPath, AssembleConfig{
+	err = uupdump.AssembleISO(context.Background(), esdPath, uupdump.AssembleConfig{
 		WorkDir: workDir,
 		ISOPath: isoPath,
 		Label:   "W11_TEST",

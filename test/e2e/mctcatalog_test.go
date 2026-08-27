@@ -1,4 +1,4 @@
-package mctcatalog
+package e2e
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"github.com/devcell-sh/go-wimlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/devcell-sh/go-winkit/mctcatalog"
 )
 
 // TestFetchWindowsISO_Download is a long test: downloads a ~4.3 GB ESD from
@@ -25,7 +27,7 @@ func TestFetchWindowsISO_Download(t *testing.T) {
 
 	cacheDir := t.TempDir()
 
-	isoPath, err := FetchWindowsISO(context.Background(), FetchConfig{
+	isoPath, err := mctcatalog.FetchWindowsISO(context.Background(), mctcatalog.FetchConfig{
 		CacheDir: cacheDir,
 		Language: "en-us",
 		Edition:  "Professional",
@@ -71,7 +73,7 @@ func TestAssembleMCTISO_FromCachedESD(t *testing.T) {
 	tmpDir := t.TempDir()
 	isoPath := filepath.Join(tmpDir, "test-windows.iso")
 
-	err = AssembleMCTISO(context.Background(), esdPath, AssembleConfig{
+	err = mctcatalog.AssembleMCTISO(context.Background(), esdPath, mctcatalog.AssembleConfig{
 		WorkDir: tmpDir,
 		ISOPath: isoPath,
 		Label:   "W11_TEST",
