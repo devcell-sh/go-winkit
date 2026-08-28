@@ -377,7 +377,7 @@ func TestPadForFAT_KeepsPayloadsOutOfTheCorruptingWindow(t *testing.T) {
 			payload[i] = 'x'
 		}
 
-		padded := PadForFAT(payload)
+		padded := winpe.PadForFAT(payload)
 		imgPath := filepath.Join(t.TempDir(), "pad.img")
 		require.NoError(t, isokit.CreateFATImage(imgPath, map[string][]byte{"/f.xml": padded}), "size %d", size)
 
