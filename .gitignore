@@ -34,3 +34,19 @@ go.work.sum
 .devcell/
 .devcell.toml
 .rendered-ps1/
+
+# macOS metadata
+.DS_Store
+
+# QEMU / UTM test artifacts
+*.qcow
+*.fd
+*.utm/
+*.installing
+
+# Test results archive
+test/results_archive/
+
+# SSH test keys
+test/testdata/*.id_ed25519
+test/testdata/*.id_ed25519.pub
