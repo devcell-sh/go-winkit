@@ -166,7 +166,7 @@ if (Test-Path $wslSvc) {
     Write-Output "WSLSERVICE_EXE=FOUND"
     # Register and start it as a service
     try {
-        & sc.exe create wslservice binPath= "`"$wslSvc`"" type= own start= demand 2>&1 | ForEach-Object { Write-Output "WSLSERVICE_CREATE=$_" }
+        New-Service -Name wslservice -BinaryPathName $wslSvc -StartupType Manual -ErrorAction Stop 2>&1 | ForEach-Object { Write-Output "WSLSERVICE_CREATE=$_" }
         Start-Service -Name wslservice -ErrorAction Stop
         Start-Sleep -Seconds 3
         $ctl = New-Object System.ServiceProcess.ServiceController 'wslservice'
