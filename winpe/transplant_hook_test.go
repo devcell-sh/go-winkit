@@ -20,7 +20,7 @@ import (
 // records every step to transplant.jsonl in the run's results directory,
 // mirroring how the in-guest builder logs to build.jsonl.
 //
-// Prefers a pre-harvested donor directory (~/.devcell/cache/qemu/vmp-donor)
+// Prefers a pre-harvested donor directory (~/.winkit/cache/qemu/vmp-donor)
 // when available: it contains materialized MZ PEs from a VMP-enabled
 // install.wim, so the transplant produces loadable binaries instead of
 // delta stubs. Falls back to the install.wim path for backward compat.
@@ -61,7 +61,7 @@ func transplantBootWim(t *testing.T, bootWimPath, resultsDir string) {
 
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	donorDir := filepath.Join(home, ".devcell", "cache", "qemu", "vmp-donor")
+	donorDir := filepath.Join(home, ".winkit", "cache", "qemu", "vmp-donor")
 	if _, err := os.Stat(filepath.Join(donorDir, "Windows", "System32", "vmwp.exe")); err == nil {
 		t.Logf("using donor directory: %s", donorDir)
 		err = TransplantVMPFromDonorDir(bootWimPath, donorDir, regExport, onEvent)
@@ -75,7 +75,7 @@ func transplantBootWim(t *testing.T, bootWimPath, resultsDir string) {
 	t.Logf("VMP transplant applied to %s (%d services); log: %s",
 		filepath.Base(bootWimPath), len(VMPTransplantServices()), logPath)
 
-	wslDir := filepath.Join(home, ".devcell", "cache", "qemu", "wsl-msi-extract", "PFiles64", "WSL")
+	wslDir := filepath.Join(home, ".winkit", "cache", "qemu", "wsl-msi-extract", "PFiles64", "WSL")
 	if _, err := os.Stat(filepath.Join(wslDir, "wslservice.exe")); err != nil {
 		t.Logf("WSL engine not injected: no extracted MSI at %s", wslDir)
 		return

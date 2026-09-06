@@ -19,7 +19,7 @@ func installWimFixture(t *testing.T) string {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	p := filepath.Join(home, ".devcell", "cache", "qemu", "mct-work",
+	p := filepath.Join(home, ".winkit", "cache", "qemu", "mct-work",
 		"iso-stage", "sources", "install.wim")
 	if _, err := os.Stat(p); err != nil {
 		t.Skip("install.wim not available; skipping transplant extraction test")

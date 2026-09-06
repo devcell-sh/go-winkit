@@ -125,7 +125,7 @@ func donorDirFixture(t *testing.T) string {
 	t.Helper()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	p := filepath.Join(home, ".devcell", "cache", "qemu", "vmp-donor")
+	p := filepath.Join(home, ".winkit", "cache", "qemu", "vmp-donor")
 	if _, err := os.Stat(filepath.Join(p, "Windows", "System32", "vmwp.exe")); err != nil {
 		t.Skip("no VMP donor directory available")
 	}

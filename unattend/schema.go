@@ -68,10 +68,14 @@ var bannedElements = map[string]string{
 const (
 	unattendDocBase      = "https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/"
 	unattendReferenceURL = unattendDocBase
+	// maxCommandLength is Windows Setup's cap on RunSynchronousCommand/Path and
+	// SynchronousCommand/CommandLine. Exceeding it invalidates the whole answer
+	// file (0x80220005). It is MAX_PATH (260) minus the NUL, i.e. 259.
+	maxCommandLength = 259
 )
 
 // Validate checks an answer file against the documented placement of
-// the settings devcell relies on. It returns every problem found rather than
+// the settings winkit relies on. It returns every problem found rather than
 // stopping at the first, so one run surfaces all of them.
 //
 // Unknown elements are ignored: this validates the settings we depend on, and
@@ -123,6 +127,21 @@ func validateNode(node xmlNode, component, pass string) []error {
 		}
 	}
 
+	// Windows Setup caps the command string in RunSynchronousCommand/Path and
+	// SynchronousCommand/CommandLine at 259 chars. A longer value makes Setup
+	// reject the ENTIRE answer file at InitEngine (0x80220005 "not a valid
+	// answer file") and abort specialize — a silent "computer restarted
+	// unexpectedly" loop that costs a multi-hour install to discover (run
+	// 20260831T205732). Catch it here so it fails at build time instead.
+	if name == "Path" || name == "CommandLine" {
+		if cmd := strings.TrimSpace(node.Text); len(cmd) > maxCommandLength {
+			errs = append(errs, fmt.Errorf(
+				"<%s> is %d chars (limit %d) — Windows Setup rejects the whole answer file (0x80220005). "+
+					"Keep it short (a cmd for-loop) and move logic into a script: %.60s...",
+				name, len(cmd), maxCommandLength, cmd))
+		}
+	}
+
 	for _, child := range node.Nodes {
 		errs = append(errs, validateNode(child, component, pass)...)
 	}
@@ -150,5 +169,9 @@ type unattendComponent struct {
 
 type xmlNode struct {
 	XMLName xml.Name
-	Nodes   []xmlNode `xml:",any"`
+	// Text is the element's direct character data — used to length-check
+	// command elements (Path, CommandLine). For elements with children it is
+	// only inter-tag whitespace, which those checks ignore.
+	Text  string    `xml:",chardata"`
+	Nodes []xmlNode `xml:",any"`
 }

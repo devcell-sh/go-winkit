@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The verify script runs inside a booted devcell.wim and reports whether the
+// The verify script runs inside a booted winkit.wim and reports whether the
 // transplanted stack is actually live: registered with SCM, loaded, and
 // whether winload started the hypervisor.
 

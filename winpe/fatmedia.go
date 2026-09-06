@@ -59,4 +59,4 @@ func PadForFAT(data []byte) []byte {
 // StructuredPortName is the virtio-serial port carrying structured JSON
 // build events (build.jsonl). Guest scripts open `\\.\Global\<name>` by this
 // exact string, so it is part of the guest/host contract, not a QEMU detail.
-const StructuredPortName = `devcell.structured.0`
+const StructuredPortName = `winkit.structured.0`

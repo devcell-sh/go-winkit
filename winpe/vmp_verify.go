@@ -8,7 +8,7 @@ import (
 
 const (
 	// VMPVerifyScriptName is the verify script's filename on the agent volume.
-	VMPVerifyScriptName = `devcell-vmp-verify.ps1`
+	VMPVerifyScriptName = `winkit-vmp-verify.ps1`
 
 	// VMPVerifyBanner and VMPVerifyComplete bracket the output. The host
 	// requires both: the banner alone would pass even if the script died
@@ -19,11 +19,11 @@ const (
 
 // VMPVerifyScriptCommand is the agent command line that runs the verifier.
 func VMPVerifyScriptCommand() string {
-	return `& "$DevcellVol\` + VMPVerifyScriptName + `" $DevcellVol`
+	return `& "$WinkitVol\` + VMPVerifyScriptName + `" $WinkitVol`
 }
 
 // GenerateVMPVerifyScript produces a script that runs inside a booted
-// devcell.wim and reports whether the transplanted VirtualMachinePlatform
+// winkit.wim and reports whether the transplanted VirtualMachinePlatform
 // stack is actually live.
 //
 // It first registers the runtime pieces (drvload the transplanted INFs,

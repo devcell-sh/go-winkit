@@ -22,9 +22,9 @@ var ErrNoSuchGuestLog = errors.New("not written by the guest")
 const (
 	// BootstrapLogName mirrors unattend.BootstrapLogName to avoid an import
 	// cycle (unattend imports winpe).
-	BootstrapLogName = "devcell-bootstrap.log"
+	BootstrapLogName = "winkit-bootstrap.log"
 	// GuestDiagnosticsLogName mirrors unattend.GuestDiagnosticsLogName.
-	GuestDiagnosticsLogName = "devcell-diag.log"
+	GuestDiagnosticsLogName = "winkit-diag.log"
 )
 
 // GuestLogNames is the contract with the guest side.
@@ -73,7 +73,7 @@ type BootstrapSteps struct {
 	Unfinished []string
 }
 
-const bootstrapPrefix = "devcell-bootstrap: "
+const bootstrapPrefix = "winkit-bootstrap: "
 
 // ParseBootstrapSteps reads step outcomes out of a bootstrap transcript.
 func ParseBootstrapSteps(transcript string) BootstrapSteps {

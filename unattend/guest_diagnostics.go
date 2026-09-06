@@ -19,10 +19,10 @@ import (
 // unreliable: injected keystrokes auto-repeated and latched modifiers down.
 const (
 	// GuestDiagnosticsScriptName is the script placed on the answer volume.
-	GuestDiagnosticsScriptName = "devcell-diag.ps1"
+	GuestDiagnosticsScriptName = "winkit-diag.ps1"
 	// GuestDiagnosticsLogName is where that script writes its report, on the
 	// same volume so the host can read it back.
-	GuestDiagnosticsLogName = "devcell-diag.log"
+	GuestDiagnosticsLogName = "winkit-diag.log"
 )
 
 // GenerateGuestDiagnosticsScript returns the PowerShell run at first logon.
@@ -31,7 +31,7 @@ const (
 // assuming a drive letter — Windows assigns those dynamically, and a wrong
 // guess is exactly what made the NetKVM failure so hard to pin down.
 func GenerateGuestDiagnosticsScript() []byte {
-	return []byte(`# devcell guest diagnostics. Writes to the volume it was launched from,
+	return []byte(`# winkit guest diagnostics. Writes to the volume it was launched from,
 # which the host reads back out of the raw FAT image.
 $ErrorActionPreference = 'Continue'
 

@@ -70,7 +70,7 @@ func TransplantVMPIntoBootWimLogged(bootWimPath, installWimPath, regExportPath s
 	services := VMPTransplantServices()
 	emit(TransplantEvent{Event: "transplant_start", File: bootWimPath, Count: len(services)})
 
-	staging, err := os.MkdirTemp("", "devcell-transplant-stage-*")
+	staging, err := os.MkdirTemp("", "winkit-transplant-stage-*")
 	if err != nil {
 		return fmt.Errorf("staging dir: %w", err)
 	}
@@ -120,7 +120,7 @@ func TransplantVMPIntoBootWimLogged(bootWimPath, installWimPath, regExportPath s
 	// devices, the HCS client DLLs, and the runtime-registered drivers.
 	// Without these vmcompute can never launch a VM worker.
 	parity := append(VMPParityFiles(), VMMSExtraFiles()...)
-	parityStaging, err := os.MkdirTemp("", "devcell-parity-stage-*")
+	parityStaging, err := os.MkdirTemp("", "winkit-parity-stage-*")
 	if err != nil {
 		return fmt.Errorf("parity staging dir: %w", err)
 	}
@@ -146,7 +146,7 @@ func TransplantVMPIntoBootWimLogged(bootWimPath, installWimPath, regExportPath s
 			File: f.Dest, Source: "donor", Bytes: size})
 	}
 
-	hiveDir, err := os.MkdirTemp("", "devcell-transplant-hive-*")
+	hiveDir, err := os.MkdirTemp("", "winkit-transplant-hive-*")
 	if err != nil {
 		return fmt.Errorf("hive dir: %w", err)
 	}
@@ -283,7 +283,7 @@ func TransplantVMPFromDonorDir(bootWimPath, donorDir, regExportPath string, onEv
 			File: f.Dest, Source: "donor", Bytes: size})
 	}
 
-	hiveDir, err := os.MkdirTemp("", "devcell-transplant-hive-*")
+	hiveDir, err := os.MkdirTemp("", "winkit-transplant-hive-*")
 	if err != nil {
 		return fmt.Errorf("hive dir: %w", err)
 	}
@@ -333,8 +333,11 @@ func TransplantVMPFromDonorDir(bootWimPath, donorDir, regExportPath string, onEv
 // donor install.wim into destDir, laid out at the path it must occupy
 // inside boot.wim.
 //
-// The donor must have VirtualMachinePlatform enabled via DISM so that all
-// binaries are materialized at their System32 paths.
+// A stock install.wim ships VirtualMachinePlatform disabled: inbox drivers
+// (vmbus, hvservice, wcifs) are materialized in System32, but the VMP-only
+// binaries live solely in the WinSxS component store. Each service is sourced
+// System32-first, then from its newest WinSxS component copy (DCS-decompressed
+// as needed) — so no prior DISM enablement is required.
 func ExtractTransplantFiles(donorWimPath string, services []TransplantService, destDir string) error {
 	wim, err := wimlib.OpenWIM(donorWimPath)
 	if err != nil {
@@ -342,22 +345,11 @@ func ExtractTransplantFiles(donorWimPath string, services []TransplantService, d
 	}
 	defer wim.Close()
 
-	staging, err := os.MkdirTemp("", "devcell-transplant-*")
-	if err != nil {
-		return fmt.Errorf("staging dir: %w", err)
-	}
-	defer os.RemoveAll(staging)
-
+	var idx winSxSIndex // built lazily on the first System32 miss
 	for _, svc := range services {
-		wimPath := `\` + strings.ReplaceAll(svc.File, "/", `\`)
-		if err := wim.ExtractPaths(1, staging, []string{wimPath}); err != nil {
-			return fmt.Errorf("%s: extracting %s: %w", svc.Name, svc.File, err)
-		}
-
-		extracted := filepath.Join(staging, filepath.FromSlash(svc.File))
-		data, err := os.ReadFile(extracted)
+		data, err := extractImageFile(wim, 1, svc.File, &idx)
 		if err != nil {
-			return fmt.Errorf("%s: reading extracted %s: %w", svc.Name, svc.File, err)
+			return fmt.Errorf("%s: %w", svc.Name, err)
 		}
 
 		dest := filepath.Join(destDir, filepath.FromSlash(svc.File))

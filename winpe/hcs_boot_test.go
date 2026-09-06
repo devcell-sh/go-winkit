@@ -12,7 +12,7 @@ import (
 )
 
 // The pass3 script boots a nested VM through HCS inside a booted
-// devcell.wim — the runtime proof that the transplanted VMP stack hosts
+// winkit.wim — the runtime proof that the transplanted VMP stack hosts
 // real VMs, not just registers services.
 
 func TestGenerateHCSBootScript_RunsTheLadder(t *testing.T) {

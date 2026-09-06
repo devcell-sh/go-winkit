@@ -188,7 +188,7 @@ func wslExtractFixture(t *testing.T) string {
 	t.Helper()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	p := filepath.Join(home, ".devcell", "cache", "qemu", "wsl-msi-extract", "PFiles64", "WSL")
+	p := filepath.Join(home, ".winkit", "cache", "qemu", "wsl-msi-extract", "PFiles64", "WSL")
 	if _, err := os.Stat(filepath.Join(p, "wslservice.exe")); err != nil {
 		t.Skip("no extracted WSL MSI available (msiextract wsl.2.7.11.0.arm64.msi into cache first)")
 	}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-Setup">
+      <LabConfig>
+        <BypassTPMCheck>1</BypassTPMCheck>
+      </LabConfig>
+    </component>
+  </settings>
+</unattend>

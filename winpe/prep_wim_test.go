@@ -35,8 +35,8 @@ func TestGenerateWimBuilderScript_ContainsAllOps(t *testing.T) {
 	// Must reference install.wim as the source.
 	assert.Contains(t, script, "/Source:W:\\mnt\\install")
 
-	// Must produce devcell.wim output.
-	assert.Contains(t, script, "devcell.wim")
+	// Must produce winkit.wim output.
+	assert.Contains(t, script, "winkit.wim")
 
 	// Must write success/fail marker.
 	assert.Contains(t, script, WimBuilderDoneFile)
@@ -170,7 +170,7 @@ func TestGenerateWimBuilderScript_DefaultSourceAndTarget(t *testing.T) {
 	script := string(GenerateWimBuilderScript(cfg))
 
 	assert.Contains(t, script, `$Shared\boot.wim`)
-	assert.Contains(t, script, `$Shared\devcell.wim`)
+	assert.Contains(t, script, `$Shared\winkit.wim`)
 }
 
 func TestGenerateWimBuilderScript_CustomSourceWim(t *testing.T) {
@@ -199,12 +199,12 @@ func TestGenerateWimBuilderScript_CustomTargetWim(t *testing.T) {
 func TestGenerateWimBuilderScript_SameSourceAndTarget_NoCopy(t *testing.T) {
 	cfg := WimPrepConfig{
 		Ops:       []WimPrepOp{{Feature: "TestFeature"}},
-		SourceWim: "devcell.wim",
-		TargetWim: "devcell.wim",
+		SourceWim: "winkit.wim",
+		TargetWim: "winkit.wim",
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	assert.NotContains(t, script, "Copy-Item \"$Shared\\devcell.wim\"")
+	assert.NotContains(t, script, "Copy-Item \"$Shared\\winkit.wim\"")
 }
 
 func TestVirtIODriverPrepOps(t *testing.T) {
@@ -376,9 +376,9 @@ $structStream = [System.IO.File]::Open('` + jsonlPath + `',
     [System.IO.FileAccess]::Write,
     [System.IO.FileShare]::ReadWrite)
 
-function devcell-ram { @{} }
+function winkit-ram { @{} }
 
-function devcell-json([hashtable]$obj) {
+function winkit-json([hashtable]$obj) {
     $out = [ordered]@{}
     if ($obj.ContainsKey('event')) { $out['event'] = $obj['event'] }
     if ($obj.ContainsKey('stage')) { $out['stage'] = $obj['stage'] }
@@ -393,7 +393,7 @@ function devcell-json([hashtable]$obj) {
 
 $script:dismLastPct = -1
 $script:dismLastOp = ''
-filter devcell-dism-out {
+filter winkit-dism-out {
     param([string]$Op)
     if ($Op -ne $script:dismLastOp) {
         $script:dismLastPct = -1
@@ -403,11 +403,11 @@ filter devcell-dism-out {
     if ($_ -match '\[.*?(\d+)\.0%') {
         $pct = [int]$Matches[1]
         if ($pct -ge ($script:dismLastPct + 10) -or $pct -eq 100) {
-            devcell-json @{ event = 'dism_progress'; pct = $pct; op = $Op }
+            winkit-json @{ event = 'dism_progress'; pct = $pct; op = $Op }
             $script:dismLastPct = $pct
         }
     } elseif ($_ -notmatch '^\s*$' -and $_ -notmatch '^\[') {
-        devcell-json @{ event = 'dism_output'; line = $_.Trim(); op = $Op }
+        winkit-json @{ event = 'dism_output'; line = $_.Trim(); op = $Op }
     }
 }
 
@@ -431,7 +431,7 @@ filter devcell-dism-out {
     '',
     '[==========================100.0%==========================]',
     'The operation completed successfully.'
-) | devcell-dism-out -Op 'mount-boot'
+) | winkit-dism-out -Op 'mount-boot'
 
 # Second operation should reset the counter
 @(
@@ -439,7 +439,7 @@ filter devcell-dism-out {
     '',
     '[==========================100.0%==========================]',
     'The operation completed successfully.'
-) | devcell-dism-out -Op 'unmount-install'
+) | winkit-dism-out -Op 'unmount-install'
 
 $structStream.Close()
 `
@@ -550,7 +550,7 @@ func keyIndex(s []string, v string) int {
 func TestWimBuilderScriptCommand(t *testing.T) {
 	cmd := WimBuilderScriptCommand()
 	assert.Contains(t, cmd, WimBuilderScriptName)
-	assert.Contains(t, cmd, "$DevcellVol")
+	assert.Contains(t, cmd, "$WinkitVol")
 }
 
 // The VMP transplant is host-side work, not a DISM op: DISM cannot enable

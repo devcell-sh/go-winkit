@@ -23,9 +23,9 @@ import (
 const (
 	// BootstrapScriptName is the script placed on the answer volume and
 	// invoked by the single FirstLogonCommands entry.
-	BootstrapScriptName = "devcell-bootstrap.ps1"
+	BootstrapScriptName = "winkit-bootstrap.ps1"
 	// BootstrapLogName is the transcript the script writes next to itself.
-	BootstrapLogName = "devcell-bootstrap.log"
+	BootstrapLogName = "winkit-bootstrap.log"
 	// OpenSSHVersion pins the Win32-OpenSSH release. Win32-OpenSSH is
 	// Microsoft's own signed distribution of the same code the OpenSSH.Server
 	// capability installs, so this is not a third-party substitute: Windows
@@ -49,9 +49,54 @@ const (
 	// OpenSSHReleaseURL is Microsoft's signed ARM64 release.
 	OpenSSHReleaseURL = "https://github.com/PowerShell/Win32-OpenSSH/releases/download/" +
 		OpenSSHVersion + "/OpenSSH-ARM64.zip"
+
+	// RcloneVersion pins the rclone release the guest mounts the SFTP share
+	// with. Mount support for windows/arm64 exists since v1.59 (cgo-free
+	// cgofuse); v1.75.0 is what the CELL-532 interactive bring-up proved.
+	RcloneVersion = "v1.75.0"
+	// RclonePayloadName is the rclone release zip shipped on the answer
+	// volume. Versioned name on purpose: the download cache treats file +
+	// .done marker as a hit, so a version bump must change the name.
+	RclonePayloadName = "rclone-" + RcloneVersion + "-windows-arm64.zip"
+	// RcloneReleaseURL is the official windows/arm64 build.
+	RcloneReleaseURL = "https://downloads.rclone.org/" + RcloneVersion +
+		"/rclone-" + RcloneVersion + "-windows-arm64.zip"
+
+	// WinFspVersion pins the WinFsp release (ARM64-capable since 2.0).
+	WinFspVersion = "2.0.23075"
+	// WinFspPayloadName is the WinFsp MSI shipped on the answer volume.
+	WinFspPayloadName = "winfsp-" + WinFspVersion + ".msi"
+	// WinFspReleaseURL is the signed WinFsp installer.
+	WinFspReleaseURL = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-" +
+		WinFspVersion + ".msi"
+
+	// RcloneMountTaskName is the scheduled task that runs the rclone mount.
+	// The shape is load-bearing (CELL-532): launched from an SSH session,
+	// rclone dies with the session and the WinFsp drive letter is per-logon;
+	// as an on-start SYSTEM task the mount survives sessions, remounts on
+	// every boot, and the drive is visible globally — including to WSL1
+	// drvfs, the whole point of the fixed-disk mount.
+	RcloneMountTaskName = "winkit-rclone-mount"
 )
 
 // GenerateBootstrapScript renders the first-logon bootstrap for a config.
 func GenerateBootstrapScript(cfg Config) []byte {
+	if cfg.GuestHostIP == "" {
+		cfg.GuestHostIP = "10.0.2.2"
+	}
+	if cfg.SFTPPort > 0 {
+		if cfg.SFTPUser == "" {
+			cfg.SFTPUser = "winkit"
+		}
+		if cfg.SFTPPassword == "" {
+			cfg.SFTPPassword = "winkit"
+		}
+		if cfg.SFTPVolumeName == "" {
+			cfg.SFTPVolumeName = "winkit"
+		}
+		if cfg.SFTPDrive == "" {
+			cfg.SFTPDrive = "W"
+		}
+	}
 	return []byte(templates.Render("bootstrap.ps1.tmpl", cfg))
 }
