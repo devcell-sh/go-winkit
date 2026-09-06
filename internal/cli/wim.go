@@ -58,7 +58,7 @@ func newWimInjectCmd() *cobra.Command {
 		Use:   "inject <boot.wim>",
 		Short: "Inject a WinPE payload directory into boot.wim image 2",
 		Long: "Injects a payload directory into boot.wim image 2: winpeshl.ini goes to\n" +
-			"System32, the whole directory lands at X:\\devcell. The WIM is modified\n" +
+			"System32, the whole directory lands at X:\\winkit. The WIM is modified\n" +
 			"in place.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
