@@ -12,15 +12,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/cache"
 	"github.com/devcell-sh/go-winkit/isokit"
 )
 
 type FetchConfig struct {
-	CacheDir    string
-	Language    string
-	Edition     string
-	LogFunc     func(format string, args ...any)
-	OnProgress  func(filename string, bytesDownloaded, totalBytes int64)
+	CacheDir   string
+	Language   string
+	Edition    string
+	LogFunc    func(format string, args ...any)
+	OnProgress func(filename string, bytesDownloaded, totalBytes int64)
 }
 
 func (c *FetchConfig) logf(format string, args ...any) {
@@ -45,11 +46,14 @@ func FetchWindowsISO(ctx context.Context, cfg FetchConfig) (string, error) {
 	if cfg.Edition == "" {
 		cfg.Edition = "Professional"
 	}
+	// An unset CacheDir falls back to the shared default rather than
+	// failing, so every fetcher behaves the same way and a library caller
+	// can opt out of the environment by setting it explicitly.
 	if cfg.CacheDir == "" {
-		return "", fmt.Errorf("CacheDir is required")
+		cfg.CacheDir = cache.Dir()
 	}
 
-	isoPath := filepath.Join(cfg.CacheDir, fmt.Sprintf("windows-arm64-%s.iso",
+	isoPath := filepath.Join(cfg.CacheDir, fmt.Sprintf("windows-11-mct-arm64-%s.iso",
 		strings.ReplaceAll(strings.ToLower(cfg.Language), " ", "-")))
 
 	if info, err := os.Stat(isoPath); err == nil && info.Size() > 0 {
@@ -60,7 +64,7 @@ func FetchWindowsISO(ctx context.Context, cfg FetchConfig) (string, error) {
 			cfg.logf("existing ISO is unusable (%v) — rebuilding", bootErr)
 			os.Remove(isoPath)
 		} else {
-			cfg.logf("ISO already exists: %s (%d bytes)", isoPath, info.Size())
+			cfg.logf("ISO cached (%.1f GB)", float64(info.Size())/(1024*1024*1024))
 			return isoPath, nil
 		}
 	}
@@ -71,6 +75,10 @@ func FetchWindowsISO(ctx context.Context, cfg FetchConfig) (string, error) {
 	esdEntry, err := client.FindARM64ESD(ctx, cfg.Language, cfg.Edition)
 	if err != nil {
 		return "", fmt.Errorf("finding ARM64 ESD in MCT catalog: %w", err)
+	}
+
+	if build := esdEntry.BuildNumber(); build != "" {
+		cfg.logf("current GA per Microsoft: %s", build)
 	}
 
 	downloadDir := filepath.Join(cfg.CacheDir, "mct-download")

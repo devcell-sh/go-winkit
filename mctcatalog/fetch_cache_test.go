@@ -16,7 +16,7 @@ import (
 func plantISO(t *testing.T, cacheDir string, bootable bool) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(cacheDir, 0o755))
-	isoPath := filepath.Join(cacheDir, "windows-arm64-en-us.iso")
+	isoPath := filepath.Join(cacheDir, "windows-11-mct-arm64-en-us.iso")
 	img := make([]byte, 64*2048)
 	for sector, magic := range map[int]string{16: "BEA01", 17: "NSR02", 18: "TEA01"} {
 		copy(img[sector*2048+1:], magic)

@@ -22,6 +22,12 @@ type DownloadConfig struct {
 	Concurrency int
 	OnProgress  ProgressFunc
 	HTTPClient  *http.Client
+
+	// OnFileStart and OnFileDone bracket each file's download (called
+	// from worker goroutines). They exist so a UI can render the file
+	// set as live sub-items rather than one opaque byte counter.
+	OnFileStart func(filename string)
+	OnFileDone  func(filename string, size int64)
 }
 
 type DownloadResult struct {
@@ -76,6 +82,10 @@ func DownloadFiles(ctx context.Context, files map[string]File, cfg DownloadConfi
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			if cfg.OnFileStart != nil {
+				cfg.OnFileStart(w.name)
+			}
+
 			var perFileProgress ProgressFunc
 			if cfg.OnProgress != nil && len(items) > 1 && totalExpected > 0 {
 				var lastPerFile int64
@@ -95,6 +105,9 @@ func DownloadFiles(ctx context.Context, files map[string]File, cfg DownloadConfi
 
 			dest := filepath.Join(cfg.Dir, w.name)
 			size, err := downloadOne(ctx, cfg.HTTPClient, w.file, dest, w.name, perFileProgress)
+			if err == nil && cfg.OnFileDone != nil {
+				cfg.OnFileDone(w.name, size)
+			}
 			results[idx] = DownloadResult{
 				Filename: w.name,
 				Path:     dest,

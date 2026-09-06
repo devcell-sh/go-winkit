@@ -17,7 +17,20 @@ import (
 	"github.com/diskfs/go-diskfs/disk"
 	"github.com/diskfs/go-diskfs/filesystem"
 	"github.com/diskfs/go-diskfs/filesystem/iso9660"
+	"github.com/diskfs/go-diskfs/partition/gpt"
+
+	"github.com/devcell-sh/go-winkit/iotrace"
 )
+
+// traceFileSize reports a path's size for tracing, or 0 when it cannot be
+// read. Tracing must never be the reason an image build fails.
+func traceFileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
 
 // CreateSimpleISO creates an ISO 9660 image with Rock Ridge extensions at
 // isoPath containing the given files. Keys are absolute paths (e.g.
@@ -256,10 +269,14 @@ func efiBootImage(stageDir string) (string, error) {
 // On macOS: uses hdiutil makehybrid (built-in) as primary, genisoimage/mkisofs
 // as fallback. hdiutil produces a UDF+ISO9660 hybrid that UEFI firmware boots
 // natively without an El Torito catalog.
-func CreateWindowsISO(isoPath, stageDir, volumeLabel string) error {
+func CreateWindowsISO(isoPath, stageDir, volumeLabel string) (err error) {
 	if volumeLabel == "" {
 		volumeLabel = "YOURISO"
 	}
+
+	done := iotrace.StartDetail(iotrace.KindCreateISO, isoPath,
+		"stage "+stageDir+", label "+volumeLabel)
+	defer func() { done(traceFileSize(isoPath), err) }()
 
 	efiBootFile, err := efiBootImage(stageDir)
 	if err != nil {
@@ -439,11 +456,102 @@ func collectFiles(root string) (map[string][]byte, error) {
 	return files, err
 }
 
+// fatDiskSize returns the image size CreateFATImage allocates for totalSize
+// bytes of file content: content + 10MB headroom, floored at 64MB (see the
+// FAT16-by-cluster-count note in CreateFATImage). Shared with FATClusterBytes
+// so the two never drift.
+func fatDiskSize(totalSize int64) int64 {
+	diskSize := totalSize + 10*1024*1024
+	if diskSize < 64*1024*1024 {
+		diskSize = 64 * 1024 * 1024
+	}
+	return diskSize
+}
+
+// FATClusterBytes returns the cluster size go-diskfs formats for an image
+// holding totalSize bytes of files. It mirrors go-diskfs v1.9.4's size→cluster
+// table (filesystem/fat32/fat32.go): a bigger volume gets bigger clusters, so a
+// fixed pad boundary (once 2048) stops aligning as payloads grow past 260MB.
+// Callers pad each file to this boundary to dodge the near-boundary
+// directory-entry size bug (a file ending mid-cluster reads back cluster-
+// rounded, appending garbage). See CreateFATImagePadded.
+func FATClusterBytes(totalSize int64) int64 {
+	const MB = 1024 * 1024
+	const GB = 1024 * MB
+	switch size := fatDiskSize(totalSize); {
+	case size <= 260*MB:
+		return 512
+	case size <= 8*GB:
+		return 4096
+	case size <= 16*GB:
+		return 8192
+	case size <= 32*GB:
+		return 16384
+	default:
+		return 32768
+	}
+}
+
+// padToFATCluster extends data with trailing newlines to a whole multiple of
+// clusterBytes. Every file we pad this way (XML, PowerShell, .nsh, and PE
+// payloads that carry the tail as an ignored overlay) tolerates trailing
+// whitespace, so cluster-filling each file is safe.
+func padToFATCluster(data []byte, clusterBytes int) []byte {
+	if clusterBytes <= 0 {
+		return data
+	}
+	rem := len(data) % clusterBytes
+	if rem == 0 {
+		return data
+	}
+	out := make([]byte, len(data)+clusterBytes-rem)
+	copy(out, data)
+	for i := len(data); i < len(out); i++ {
+		out[i] = '\n'
+	}
+	return out
+}
+
+// CreateFATImagePadded writes a FAT image whose `padded` files are each
+// extended to the volume's cluster boundary (dodging the go-diskfs boundary
+// size bug) while `exact` files are written byte-identical — driver payloads
+// must match a catalog hash and cannot carry padding. The cluster size depends
+// on the final image size, which the padding itself grows, so it is resolved to
+// a fixed point before writing. CreateFATImage's round-trip verification still
+// guards every file, exact ones included.
+func CreateFATImagePadded(imgPath string, padded, exact map[string][]byte) error {
+	// Resolve cluster ↔ padded size to a fixed point. The table is monotonic
+	// and coarse (512 → 4K → 8K…), so this settles in one or two rounds; the
+	// cap is a backstop. The `total` here equals what CreateFATImage will sum
+	// from the same map, so the cluster it picks matches what we padded to.
+	cluster := int64(512)
+	var files map[string][]byte
+	for i := 0; i < 8; i++ {
+		files = make(map[string][]byte, len(padded)+len(exact))
+		var total int64
+		for name, data := range padded {
+			pd := padToFATCluster(data, int(cluster))
+			files[name] = pd
+			total += int64(len(pd))
+		}
+		for name, data := range exact {
+			files[name] = data
+			total += int64(len(data))
+		}
+		if next := FATClusterBytes(total); next != cluster {
+			cluster = next
+			continue
+		}
+		break
+	}
+	return CreateFATImage(imgPath, files)
+}
+
 // CreateFATImage creates a FAT32 disk image at imgPath containing the given
 // files. Keys are absolute paths (e.g. "/startup.nsh"), values are file content.
 // UEFI firmware mounts FAT natively, so this is the right format for images
 // that need to be visible as an FS device in the UEFI shell.
-func CreateFATImage(imgPath string, files map[string][]byte) error {
+func CreateFATImage(imgPath string, files map[string][]byte) (err error) {
 	if len(files) == 0 {
 		return fmt.Errorf("no files to add to FAT image")
 	}
@@ -452,16 +560,17 @@ func CreateFATImage(imgPath string, files map[string][]byte) error {
 	for _, data := range files {
 		totalSize += int64(len(data))
 	}
+
+	done := iotrace.StartDetail(iotrace.KindCreateFAT, imgPath,
+		fmt.Sprintf("%d file(s), %d B content", len(files), totalSize))
+	defer func() { done(traceFileSize(imgPath), err) }()
 	// Floor of 64MB, never less than content + headroom. go-diskfs always
 	// lays the volume out as FAT32, and the FAT spec makes any volume under
 	// 65525 data clusters a FAT16 volume BY DEFINITION — parsers type-detect
 	// from the cluster count, not the BPB layout. A 20MB image was therefore
 	// self-contradictory; EDK2 misparsed it as FAT16 and data-aborted at boot
 	// (run 20260729T184712). 64MB yields ~130k clusters of 512B: legal FAT32.
-	diskSize := totalSize + 10*1024*1024
-	if diskSize < 64*1024*1024 {
-		diskSize = 64 * 1024 * 1024
-	}
+	diskSize := fatDiskSize(totalSize)
 
 	os.Remove(imgPath)
 	d, err := diskfs.Create(imgPath, diskSize, diskfs.SectorSizeDefault)
@@ -511,7 +620,7 @@ func CreateFATImage(imgPath string, files map[string][]byte) error {
 // CreateFATImageSized works like CreateFATImage but enforces a minimum disk
 // size. Use this when the guest needs free space beyond the initial content
 // (e.g. a builder WinPE that writes results back to the volume).
-func CreateFATImageSized(imgPath string, files map[string][]byte, minSize int64) error {
+func CreateFATImageSized(imgPath string, files map[string][]byte, minSize int64) (err error) {
 	if len(files) == 0 {
 		return fmt.Errorf("no files to add to FAT image")
 	}
@@ -520,6 +629,10 @@ func CreateFATImageSized(imgPath string, files map[string][]byte, minSize int64)
 	for _, data := range files {
 		totalSize += int64(len(data))
 	}
+
+	done := iotrace.StartDetail(iotrace.KindCreateFAT, imgPath,
+		fmt.Sprintf("%d file(s), %d B content, min %d B", len(files), totalSize, minSize))
+	defer func() { done(traceFileSize(imgPath), err) }()
 	diskSize := totalSize + 10*1024*1024
 	if diskSize < minSize {
 		diskSize = minSize
@@ -554,8 +667,88 @@ func CreateFATImageSized(imgPath string, files map[string][]byte, minSize int64)
 	return nil
 }
 
+// CreateGPTFATImageSized writes a GPT-partitioned disk image whose single EFI
+// System Partition holds a FAT32 filesystem with the given files (semantics
+// otherwise like CreateFATImageSized). Apple's Virtualization.framework EFI
+// refuses to boot a partitionless FAT "superfloppy" on any bus (usb/virtio:
+// vCPUs stay parked, screen stays black), while GPT+ESP is the layout every
+// Tart/UTM-booted disk has.
+func CreateGPTFATImageSized(imgPath string, files map[string][]byte, minSize int64) (err error) {
+	if len(files) == 0 {
+		return fmt.Errorf("no files to add to FAT image")
+	}
+
+	var totalSize int64
+	for _, data := range files {
+		totalSize += int64(len(data))
+	}
+
+	done := iotrace.StartDetail(iotrace.KindCreateFAT, imgPath,
+		fmt.Sprintf("%d file(s), %d B content, min %d B, gpt+esp", len(files), totalSize, minSize))
+	defer func() { done(traceFileSize(imgPath), err) }()
+
+	partSize := totalSize + 10*1024*1024
+	if partSize < minSize {
+		partSize = minSize
+	}
+	if partSize < 64*1024*1024 {
+		partSize = 64 * 1024 * 1024
+	}
+
+	const sectorSize = 512
+	const partStart = 2048 // 1 MiB alignment; leaves room for the primary GPT
+	partSectors := (partSize + sectorSize - 1) / sectorSize
+	// Round the whole image up to 1 MiB after reserving 33 backup-GPT sectors.
+	diskSize := (partStart + partSectors + 33 + 2047) / 2048 * 2048 * sectorSize
+
+	os.Remove(imgPath)
+	d, err := diskfs.Create(imgPath, diskSize, diskfs.SectorSizeDefault)
+	if err != nil {
+		return fmt.Errorf("creating GPT disk image: %w", err)
+	}
+
+	table := &gpt.Table{
+		LogicalSectorSize: sectorSize,
+		ProtectiveMBR:     true,
+		Partitions: []*gpt.Partition{{
+			Index: 1,
+			Start: partStart,
+			End:   uint64(partStart + partSectors - 1),
+			Type:  gpt.EFISystemPartition,
+			Name:  "UEFIBOOT",
+		}},
+	}
+	if err := d.Partition(table); err != nil {
+		return fmt.Errorf("writing GPT: %w", err)
+	}
+
+	fs, err := d.CreateFilesystem(disk.FilesystemSpec{
+		Partition:   1,
+		FSType:      filesystem.TypeFat32,
+		VolumeLabel: "UEFIBOOT",
+	})
+	if err != nil {
+		return fmt.Errorf("creating FAT32 filesystem in ESP: %w", err)
+	}
+
+	if err := addFilesToFAT(fs, files); err != nil {
+		return err
+	}
+
+	if err := d.Close(); err != nil {
+		return fmt.Errorf("finalizing GPT image: %w", err)
+	}
+	return nil
+}
+
 // ReadFileFromFAT reads a file from a FAT32 disk image and returns its content.
-func ReadFileFromFAT(imgPath, filePath string) ([]byte, error) {
+func ReadFileFromFAT(imgPath, filePath string) (data []byte, err error) {
+	done := iotrace.StartDetail(iotrace.KindRead, imgPath, "fat member "+filePath)
+	defer func() { done(int64(len(data)), err) }()
+	return readFileFromFAT(imgPath, filePath)
+}
+
+func readFileFromFAT(imgPath, filePath string) ([]byte, error) {
 	d, err := diskfs.Open(imgPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening FAT image: %w", err)
@@ -614,7 +807,13 @@ func readAllGuarded(r io.Reader) (data []byte, err error) {
 //  1. go-diskfs (handles simple ISOs created by CreateSimpleISO)
 //  2. raw ISO 9660 directory parsing (handles hybrid images)
 //  3. external tool (7z or bsdtar — handles pure UDF like Windows ARM64 media)
-func ReadFileFromISO(isoPath, filePath string) ([]byte, error) {
+func ReadFileFromISO(isoPath, filePath string) (data []byte, err error) {
+	done := iotrace.StartDetail(iotrace.KindRead, isoPath, "iso member "+filePath)
+	defer func() { done(int64(len(data)), err) }()
+	return readFileFromISO(isoPath, filePath)
+}
+
+func readFileFromISO(isoPath, filePath string) ([]byte, error) {
 	data, err := readFileFromISODiskfs(isoPath, filePath)
 	if err == nil {
 		return data, nil
@@ -883,7 +1082,7 @@ func AddElToritoEFIBoot(isoPath string, bootImage []byte) error {
 	cat := make([]byte, isoSectorSize)
 	cat[0] = 0x01 // header ID
 	cat[1] = 0xEF // platform: EFI
-	copy(cat[4:], "devcell")
+	copy(cat[4:], "winkit")
 	cat[0x1E], cat[0x1F] = 0x55, 0xAA
 	var sum uint16
 	for i := 0; i < 32; i += 2 {

@@ -84,9 +84,9 @@ func extractCAB(data []byte) (map[string][]byte, error) {
 	// Skip reserved fields if present.
 	if hdr.Flags&0x0004 != 0 { // cfhdrRESERVE_PRESENT
 		var resHdr struct {
-			CbCFHeader  uint16
-			CbCFFolder  uint8
-			CbCFData    uint8
+			CbCFHeader uint16
+			CbCFFolder uint8
+			CbCFData   uint8
 		}
 		if err := binary.Read(r, binary.LittleEndian, &resHdr); err != nil {
 			return nil, fmt.Errorf("cab: reading reserve header: %w", err)
@@ -196,7 +196,7 @@ func extractCAB(data []byte) (map[string][]byte, error) {
 type cabHeader struct {
 	Signature  [4]byte
 	_          uint32 // reserved
-	CabinetSz uint32
+	CabinetSz  uint32
 	_          uint32 // reserved
 	OffFiles   uint32
 	_          uint32 // reserved

@@ -212,6 +212,18 @@ func TestIsDeltaBuild(t *testing.T) {
 		{"Windows 11 Insider Preview arm64", false},
 		{"Windows 11 24H2 arm64", false},
 		{"Feature update to Windows 11 24H2 arm64", false},
+
+		// UUP dump does not normalise case in build titles.
+		{"windows 11, version 24h2 (kb5050094)", true},
+		{"FEATURE UPDATE to Windows 11 24H2 arm64", false},
+
+		// A feature update is full media even when published under a KB
+		// number, so the feature-update check has to win over the KB one.
+		{"Feature update to Windows 11, version 24H2 (KB5050094)", false},
+
+		// "KB" is only a delta marker when it carries an article number;
+		// matching the bare letters would misclassify ordinary titles.
+		{"Windows 11 KBLayout Test Build arm64", false},
 	}
 	for _, tt := range tests {
 		if got := isDeltaBuild(tt.title); got != tt.want {
