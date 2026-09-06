@@ -3,9 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +20,7 @@ func newWinPECmd() *cobra.Command {
 	cmd.AddCommand(
 		newWinPEStageCmd(),
 		newWinPEBuildCmd(),
+		newWinPERunCmd(),
 	)
 	return cmd
 }
@@ -102,11 +101,11 @@ func newWinPEBuildCmd() *cobra.Command {
 				gosshdCmd := "@echo off\r\n" +
 					"wpeinit\r\n" +
 					"wpeutil DisableFirewall\r\n" +
-					`X:\devcell\gosshd.exe X:\devcell\gosshd.log` + "\r\n"
+					`X:\winkit\gosshd.exe X:\winkit\gosshd.log` + "\r\n"
 				if err := os.WriteFile(filepath.Join(payloadDir, "gosshd.cmd"), []byte(gosshdCmd), 0o644); err != nil {
 					return err
 				}
-				shellINI := "[LaunchApps]\r\n" + `X:\devcell\gosshd.cmd` + "\r\n"
+				shellINI := "[LaunchApps]\r\n" + `X:\winkit\gosshd.cmd` + "\r\n"
 				if err := os.WriteFile(filepath.Join(payloadDir, "winpeshl.ini"), []byte(shellINI), 0o644); err != nil {
 					return err
 				}
@@ -167,13 +166,7 @@ func newWinPEBuildCmd() *cobra.Command {
 // toolchain, resolving the package source through the module cache so it
 // works both inside the winkit repo and in any module that depends on it.
 func buildGosshd(dst, arch string) error {
-	pkg := "github.com/devcell-sh/go-winkit/gosshd/cmd/gosshd"
-	build := exec.Command("go", "build", "-o", dst, pkg)
-	build.Env = append(os.Environ(), "GOOS=windows", "GOARCH="+arch, "CGO_ENABLED=0")
-	if out, err := build.CombinedOutput(); err != nil {
-		return fmt.Errorf("go build %s: %w\n%s", pkg, err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return winpe.CrossCompileGosshd(dst, arch)
 }
 
 func copyFile(src, dst string) error {
