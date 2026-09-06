@@ -1,10 +1,281 @@
 version: "3"
 
 tasks:
+  build:
+    desc: Build winkit CLI binary → ./bin/winkit
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    vars:
+      # wimlib is compiled in by default wherever CGO is on (darwin):
+      # fetch/build subcommands need libwim, and a binary without it only
+      # discovers that after a multi-GB download. Override with
+      # WINKIT_BUILD_TAGS to change.
+      #
+      # Linking is dynamic by default (system libwim via pkg-config: brew
+      # install wimlib). WINKIT_LINK=static links the vendored libwim.a
+      # instead — self-contained, but the .a must exist for this platform
+      # (build it with `task static-lib` in the go-wimlib repo).
+      LINK: '{{.WINKIT_LINK | default "dynamic"}}'
+      DEFAULT_TAGS: '{{if eq OS "darwin"}}wimlib{{if eq .LINK "static"}} wimlib_static{{end}}{{end}}'
+      TAGS: '{{.WINKIT_BUILD_TAGS | default .DEFAULT_TAGS}}'
+    cmds:
+      - mkdir -p bin
+      - CGO_ENABLED={{if eq OS "darwin"}}1{{else}}0{{end}} go build {{if .TAGS}}-tags "{{.TAGS}}" {{end}}-o ./bin/winkit ./cmd/winkit/
+      - '[ "$(uname -s)" != "Darwin" ] || xattr -c ./bin/winkit'
+      - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - ./bin/winkit'
+
+  install:
+    desc: Build + copy ./bin/winkit → ~/.local/bin/winkit
+    dir: "{{.TASKFILE_DIR}}"
+    deps: [build]
+    silent: true
+    cmds:
+      - mkdir -p ~/.local/bin
+      - cp ./bin/winkit ~/.local/bin/winkit
+      - '[ "$(uname -s)" != "Darwin" ] || xattr -c ~/.local/bin/winkit'
+      - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - ~/.local/bin/winkit'
+      - echo "Installed to ~/.local/bin/winkit"
+
   test:
     desc: Run the unit tests (e2e tests under test/e2e are opt-in, run them from that dir)
+    # Discovered rather than enumerated: a hand-kept list silently drops new
+    # packages, which is how gosshd and internal/cli went untested. Only
+    # test/e2e is excluded, since those download several GB when not -short.
     cmds:
-      - go test ./templates/... ./unattend/... ./wim/... ./winpe/... ./diag/... ./isokit/... ./mctcatalog/... ./uupdump/...
+      - go test $(go list ./... | grep -v '/test/e2e')
+
+  test:seed:
+    desc: Download and assemble the ISOs the real-media and integration tests read
+    summary: |
+      Seeds the winkit cache with the Windows installer and virtio-win driver
+      ISOs. Tests that need real media skip without them, so run this once
+      before `task test:integration`.
+
+      Downloads several GB and the Windows assembly step takes a while. Both
+      fetches are idempotent: an ISO that is already cached and valid is left
+      alone, so re-running is cheap.
+
+      Override the location with WINKIT_CACHE_DIR.
+    cmds:
+      - go run -tags wimlib ./cmd/winkit fetch
+      - go run ./cmd/winkit fetch virtio
+
+  test:seed:where:
+    desc: Print the cache paths the tests read, and whether they are seeded
+    silent: true
+    # Exits non-zero when the cache is incomplete so CI can gate on it;
+    # ignored here so asking a question never looks like a broken task.
+    ignore_error: true
+    cmds:
+      - go run ./tools/seedstatus
+
+  test:integration:
+    desc: "Boot WinPE in QEMU end to end (needs: task test:seed)"
+    cmds:
+      - go test -tags 'wimlib integration' -run TestWimBuilder/tcg -timeout 40m -v ./winpe/qemu/
+
+  test:data:promote:
+    desc: Copy the newest test/results WSL disk (wsl.qcow2) into test/testdata
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        set -e
+        RESULTS="{{.TASKFILE_DIR}}/test/results"
+        DEST="{{.TASKFILE_DIR}}/test/testdata"
+        # Result dirs are timestamp-prefixed, so lexical sort is chronological.
+        SRC=$(ls -d "$RESULTS"/*/wsl.qcow2 2>/dev/null | sort | tail -1)
+        if [ -z "$SRC" ]; then
+          echo "no wsl.qcow2 found under $RESULTS — run task test:wsl first" >&2
+          exit 1
+        fi
+        mkdir -p "$DEST"
+        echo "promoting $SRC -> $DEST/wsl.qcow2"
+        cp "$SRC" "$DEST/wsl.qcow2.partial"
+        mv "$DEST/wsl.qcow2.partial" "$DEST/wsl.qcow2"
+        ls -lh "$DEST/wsl.qcow2"
+
+  test:wsl:
+    desc: "Full unattended Windows install with NixDev (WSL1) + SFTP fixed-disk share; WINKIT_WSL2=true adds the hypervisor stack"
+    summary: |
+      Runs TestQcowBuilderWSL: builds nix.wsl (docker; cached), builds the
+      answer volume (gosshd, OpenSSH, rclone/WinFsp payloads, nix.wsl), boots
+      Windows Setup, installs to disk, brings up SSH+RDP, verifies the
+      bootstrap-imported NixDev distro (`nix --version` + drvfs W: probe),
+      asserts the SFTP fixed-disk round trip, and shuts down cleanly.
+
+      WSL2 is opt-in: WINKIT_WSL2=true additionally enables and verifies
+      VirtualMachinePlatform/WSL/Hyper-V online (needs a nested-virt-capable
+      runtime host to actually engage). Default builds a WSL1-only image —
+      no hypervisor features.
+
+      Continue mode: WINKIT_E2E_DISK=<installed.qcow2> boots an existing disk
+      instead of installing, re-verifies (SSH/RDP, SFTP share, NixDev), and
+      with WINKIT_E2E_INTERACTIVE (default on) stays up for manual poking.
+
+      Env: WINKIT_E2E_ACCEL (default hvf on Mac), WINKIT_E2E_DISK,
+      WINKIT_E2E_TEARDOWN, WINKIT_E2E_OUTDIR, WINKIT_SHARED_DIR /
+      WINKIT_E2E_SHARED_DIR, WINKIT_SFTP_PORT (default 9844), WINKIT_WSL2,
+      WINKIT_LINK=static for vendored libwim.
+
+      Artifacts (log, screenshots, wsl.qcow2) persist under
+      test/results/<ts>-TestQcowBuilderWSL (WINKIT_E2E_OUTDIR overrides).
+    dir: "{{.TASKFILE_DIR}}"
+    vars:
+      LINK: '{{.WINKIT_LINK | default "dynamic"}}'
+      TAGS: 'integration wimlib{{if eq .LINK "static"}} wimlib_static{{end}}'
+    env:
+      WINKIT_E2E: "1"
+    cmds:
+      # Artifacts land in test/results/<ts>-TestQcowBuilderWSL (house
+      # convention, via testutil.ResultDir). The tee keeps the go-test stdout —
+      # which logs that result dir — in the bind-mounted .scratch/debug so it is
+      # readable from the devcell container.
+      - mkdir -p .scratch/debug
+      - set -o pipefail; CGO_ENABLED=1 go test -tags '{{.TAGS}}' -run TestQcowBuilderWSL -v -timeout 5h ./internal/cli/ 2>&1 | tee .scratch/debug/test-wsl.log
+
+
+  sftp:get:
+    desc: "Fetch rclone for the host (darwin) + guest tools (rclone win-arm64, WinFsp MSI) into the cache (CELL-532)"
+    vars:
+      TOOLS: "{{.HOME}}/.cache/winkit/tools"
+      WINFSP_URL: https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi
+    cmds:
+      - mkdir -p "{{.TOOLS}}"
+      - |
+        set -euo pipefail
+        cd "{{.TOOLS}}"
+        if [ ! -x rclone ]; then
+          curl -fL --progress-bar -o rclone-osx.zip https://downloads.rclone.org/rclone-current-osx-arm64.zip
+          unzip -jo rclone-osx.zip '*/rclone' && rm rclone-osx.zip && chmod +x rclone
+        fi
+        [ -f rclone-windows-arm64.zip ] || curl -fL --progress-bar -o rclone-windows-arm64.zip https://downloads.rclone.org/rclone-current-windows-arm64.zip
+        [ -f winfsp.msi ] || curl -fL --progress-bar -o winfsp.msi "{{.WINFSP_URL}}"
+        echo "host rclone + guest artifacts ready in {{.TOOLS}}"
+
+  sftp:serve:
+    desc: "Serve WINKIT_SFTP_DIR (default: repo) over SFTP for the guest — rclone mount backend (CELL-532)"
+    summary: |
+      Interactive bring-up for the DRIVE_FIXED mount (CELL-532):
+        terminal 1: task sftp:serve
+        terminal 2: WINKIT_E2E_TEARDOWN=false task test:wsl1
+      then over gosshd in the guest (tools land in ~/.cache/winkit/tools —
+      copy into the WebDAV shared dir, or curl.exe them straight from the web):
+        msiexec /i winfsp.msi /qn
+        rclone.exe mount :sftp,host=10.0.2.2,port={{.PORT}},user=devcell,pass=<rclone obscure devcell>:/ W: --vfs-cache-mode writes --dir-cache-time 10s
+      verify DriveType==3, then the WSL1 drvfs probe:
+        wsl -e sh -c "mkdir -p /mnt/w && mount -t drvfs W: /mnt/w && stat /mnt/w/go.mod && head -3 /mnt/w/go.mod"
+    deps: [sftp:get]
+    platforms: [darwin]
+    vars:
+      PORT: '{{.WINKIT_SFTP_PORT | default "9844"}}'
+      DIR: '{{.WINKIT_SFTP_DIR | default .TASKFILE_DIR}}'
+    cmds:
+      - '"{{.HOME}}/.cache/winkit/tools/rclone" serve sftp "{{.DIR}}" --addr 0.0.0.0:{{.PORT}} --user devcell --pass devcell -v'
+
+  test:wsl:vz:
+    desc: "test:wsl via Virtualization.framework (macOS only; codesigns the test binary)"
+    summary: |
+      Same as test:wsl, but sets WINKIT_VM_BACKEND=vz and codesigns the
+      test binary with the com.apple.security.virtualization entitlement.
+      Virtualization.framework requires this entitlement on the calling
+      process: go test spawns the binary unsigned, so we compile, sign,
+      and exec it ourselves.
+    dir: "{{.TASKFILE_DIR}}"
+    platforms: [darwin]
+    vars:
+      LINK: '{{.WINKIT_LINK | default "dynamic"}}'
+      # darwin_vz compiles the vz backend in (excluded from normal builds).
+      # NOTE: the wsl build rejects vz outright (Windows cannot boot under
+      # Virtualization.framework, CELL-523/531), so this task now fails fast
+      # with that error. Kept for the day Apple ships ACPI/vTPM support; for
+      # vz experiments with Linux media use debug:vz:bootprobe.
+      TAGS: 'integration wimlib darwin_vz{{if eq .LINK "static"}} wimlib_static{{end}}'
+    env:
+      WINKIT_E2E: "1"
+      WINKIT_VM_BACKEND: vz
+    cmds:
+      - mkdir -p .scratch/debug
+      - |
+        set -euo pipefail
+        BIN="$(mktemp -d)/cli.test"
+        CGO_ENABLED=1 go test -tags '{{.TAGS}}' -c -o "$BIN" ./internal/cli/
+        codesign --force --sign - --entitlements winpe/vz/vz.entitlements "$BIN"
+        MARK="$(mktemp)"
+        STATUS=0
+        "$BIN" -test.run TestQcowBuilderWSL -test.v -test.timeout 5h 2>&1 | tee .scratch/debug/test-wsl-vz.log || STATUS=$?
+        # A SIGTRAP from Virtualization.framework kills the test binary before
+        # it can report anything; harvest the macOS crash report (.ips) written
+        # since MARK into the run's results dir so it persists with the logs.
+        RESULTS="$(ls -td test/results/*TestQcowBuilderWSL 2>/dev/null | head -1 || true)"
+        find ~/Library/Logs/DiagnosticReports -name 'cli.test-*.ips' -newer "$MARK" 2>/dev/null | while read -r ips; do
+          echo "crash report: $ips"
+          cp "$ips" .scratch/debug/
+          [ -n "$RESULTS" ] && cp "$ips" "$RESULTS/"
+        done
+        rm -f "$MARK"
+        exit $STATUS
+
+  debug:vz:bootprobe:
+    desc: "Minimal vz control experiment: boot a known-good Linux raw image through StartRun (macOS only)"
+    summary: |
+      Minimizes variables to decide whether the vz backend can boot ANYTHING:
+      same StartRun path, one Debian nocloud arm64 disk, no Windows artifacts.
+      Guest CPU climbing / screen lighting up => vz wiring is sound and the
+      Windows boot chain is the problem. Guest parked => backend config broken.
+    dir: "{{.TASKFILE_DIR}}"
+    platforms: [darwin]
+    vars:
+      MEDIA_URL: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-nocloud-arm64.raw
+      MEDIA: "{{.HOME}}/.cache/winkit/debian-12-nocloud-arm64.raw"
+    cmds:
+      - mkdir -p .scratch/debug ~/.cache/winkit
+      - |
+        set -euo pipefail
+        if [ ! -f "{{.MEDIA}}" ]; then
+          echo "downloading Debian nocloud arm64 image (~2GB, cached afterwards)"
+          curl -fL --progress-bar -o "{{.MEDIA}}.tmp" "{{.MEDIA_URL}}"
+          mv "{{.MEDIA}}.tmp" "{{.MEDIA}}"
+        fi
+        BIN="$(mktemp -d)/vz.test"
+        CGO_ENABLED=1 go test -c -o "$BIN" ./winpe/vz/
+        codesign --force --sign - --entitlements winpe/vz/vz.entitlements "$BIN"
+        OUT="test/results/$(date +%Y%m%dT%H%M%S)-VZBootProbe"
+        mkdir -p "$OUT"
+        WINKIT_VZ_PROBE_MEDIA="{{.MEDIA}}" WINKIT_VZ_PROBE_OUTDIR="$OUT" \
+          "$BIN" -test.run '{{.RUN | default "TestVZBootProbe$"}}' -test.v -test.timeout 20m 2>&1 | tee .scratch/debug/vz-bootprobe.log
+        echo "artifacts: $OUT"
+
+  debug:vz:bootprobe:crafted:
+    desc: "Boot Debian's grub from an isokit-built GPT+ESP image — isolates our image pipeline from the Windows payload"
+    summary: |
+      Extracts the known-good Debian ESP and repacks it with
+      isokit.CreateGPTFATImageSized (the exact function that builds the
+      Windows Setup boot volume), then boots it. Grub on screen => our image
+      format is EFI-bootable and Windows bootmgfw is the isolated blocker.
+      Black screen => our GPT/FAT construction is the blocker.
+    dir: "{{.TASKFILE_DIR}}"
+    platforms: [darwin]
+    vars:
+      ESPDIR: "{{.HOME}}/.cache/winkit/debian-esp"
+      MEDIA: "{{.HOME}}/.cache/winkit/debian-12-nocloud-arm64.raw"
+    cmds:
+      - |
+        set -euo pipefail
+        # The Debian ESP is FAT16 (go-diskfs cannot read it), so extract it
+        # once via hdiutil into the cache the test reads from.
+        if [ ! -d "{{.ESPDIR}}/EFI" ]; then
+          echo "extracting Debian ESP to {{.ESPDIR}}"
+          DEV=$(hdiutil attach -imagekey diskimage-class=CRawDiskImage -nomount "{{.MEDIA}}" | awk 'NR==1{print $1}')
+          MP=$(mktemp -d)
+          diskutil mount -mountPoint "$MP" "${DEV}s15" || diskutil mount -mountPoint "$MP" "${DEV}s2"
+          mkdir -p "{{.ESPDIR}}"
+          cp -R "$MP/EFI" "{{.ESPDIR}}/"
+          diskutil unmount "$MP" || true
+          hdiutil detach "$DEV"
+        fi
+      - task: debug:vz:bootprobe
+        vars: { RUN: "TestVZBootProbeCrafted" }
 
   test:powershell:render:
     desc: Render all .ps1.tmpl templates with sample data to a temp directory for linting
@@ -47,3 +318,87 @@ tasks:
           if ($fail) { exit 1 } else { Write-Output "All scripts clean." }
         '
       - rm -rf .rendered-ps1
+
+  clean:results:
+    desc: Remove all large build artifacts under test/results
+    deps: [clean:results:qcow2, clean:results:wim, clean:results:iso, clean:results:img, clean:results:wsl]
+
+  clean:results:qcow2:
+    desc: Remove all *.qcow2 files under test/results (recursive; that tree only)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        set -e
+        DIR="{{.TASKFILE_DIR}}/test/results"
+        if [ ! -d "$DIR" ]; then
+          echo "no $DIR — nothing to clean"
+          exit 0
+        fi
+        COUNT=$(find "$DIR" -type f -name '*.qcow2' | wc -l | tr -d ' ')
+        find "$DIR" -type f -name '*.qcow2' -print -delete
+        echo "removed $COUNT *.qcow2 file(s) from $DIR"
+
+  clean:results:wim:
+    desc: Remove all *.wim files under test/results (recursive; that tree only)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        set -e
+        DIR="{{.TASKFILE_DIR}}/test/results"
+        if [ ! -d "$DIR" ]; then
+          echo "no $DIR — nothing to clean"
+          exit 0
+        fi
+        COUNT=$(find "$DIR" -type f -name '*.wim' | wc -l | tr -d ' ')
+        find "$DIR" -type f -name '*.wim' -print -delete
+        echo "removed $COUNT *.wim file(s) from $DIR"
+
+  clean:results:iso:
+    desc: Remove all *.iso files under test/results (recursive; that tree only)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        set -e
+        DIR="{{.TASKFILE_DIR}}/test/results"
+        if [ ! -d "$DIR" ]; then
+          echo "no $DIR — nothing to clean"
+          exit 0
+        fi
+        COUNT=$(find "$DIR" -type f -name '*.iso' | wc -l | tr -d ' ')
+        find "$DIR" -type f -name '*.iso' -print -delete
+        echo "removed $COUNT *.iso file(s) from $DIR"
+
+  clean:results:img:
+    desc: Remove all *.img files under test/results (recursive; that tree only)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        set -e
+        DIR="{{.TASKFILE_DIR}}/test/results"
+        if [ ! -d "$DIR" ]; then
+          echo "no $DIR — nothing to clean"
+          exit 0
+        fi
+        COUNT=$(find "$DIR" -type f -name '*.img' | wc -l | tr -d ' ')
+        find "$DIR" -type f -name '*.img' -print -delete
+        echo "removed $COUNT *.img file(s) from $DIR"
+
+  clean:results:wsl:
+    desc: Remove all *.wsl files under test/results (recursive; that tree only)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        set -e
+        DIR="{{.TASKFILE_DIR}}/test/results"
+        if [ ! -d "$DIR" ]; then
+          echo "no $DIR — nothing to clean"
+          exit 0
+        fi
+        COUNT=$(find "$DIR" -type f -name '*.wsl' | wc -l | tr -d ' ')
+        find "$DIR" -type f -name '*.wsl' -print -delete
+        echo "removed $COUNT *.wsl file(s) from $DIR"

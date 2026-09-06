@@ -7,27 +7,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/devcell-sh/go-winkit/cache"
 	"github.com/devcell-sh/go-winkit/isokit"
 )
 
-// windowsISOPath locates a real Windows ARM64 ISO to test against: the
-// DEVCELL_TEST_WINISO env var first, then the devcell cache location.
+// windowsISOPath locates a real Windows ARM64 ISO to test against. The
+// cache is seeded by `task test:seed`; point WINKIT_CACHE_DIR elsewhere to
+// use a different copy.
 func windowsISOPath(t *testing.T) string {
 	t.Helper()
-	candidates := []string{
-		os.Getenv("DEVCELL_TEST_WINISO"),
-		os.ExpandEnv("$HOME/.devcell/cache/qemu/windows-arm64-en-us.iso"),
+	p := cache.WindowsISO()
+	if _, err := os.Stat(p); err != nil {
+		t.Skipf("Windows ISO not available at %s (run: task test:seed)", p)
 	}
-	for _, p := range candidates {
-		if p == "" {
-			continue
-		}
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	t.Skip("Windows ISO not available (set DEVCELL_TEST_WINISO)")
-	return ""
+	return p
 }
 
 func TestDiagnoseISO_RealWindowsISO(t *testing.T) {

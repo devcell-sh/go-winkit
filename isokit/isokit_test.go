@@ -719,7 +719,7 @@ func TestReadFileFromFAT_ReturnsAnErrorInsteadOfPanicking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	data, err := ReadFileFromFAT(path, "/devcell-diag.log")
+	data, err := ReadFileFromFAT(path, "/winkit-diag.log")
 
 	if err == nil {
 		t.Fatalf("expected an error for a non-FAT image, got %d bytes", len(data))
@@ -733,14 +733,14 @@ func TestReadFileFromFAT_ReturnsAnErrorInsteadOfPanicking(t *testing.T) {
 func TestReadFileFromFAT_InflatedDirectoryEntrySizeIsAnErrorNotAPanic(t *testing.T) {
 	img := filepath.Join(t.TempDir(), "answer.img")
 	require.NoError(t, CreateFATImage(img, map[string][]byte{
-		"/devcell-diag.log": []byte("short log\n"),
+		"/winkit-diag.log": []byte("short log\n"),
 	}))
 
 	raw, err := os.ReadFile(img)
 	require.NoError(t, err)
 	// Find the 8.3 directory entry and inflate its size field (last 4 bytes of
 	// the 32-byte entry) past what the chain actually contains.
-	idx := bytes.Index(raw, []byte("DEVCEL~1LOG"))
+	idx := bytes.Index(raw, []byte("WINKIT~1LOG"))
 	require.GreaterOrEqual(t, idx, 0, "could not locate the directory entry to corrupt")
 	off := idx + 28
 	binary.LittleEndian.PutUint32(raw[off:off+4], binary.LittleEndian.Uint32(raw[off:off+4])+100000)
@@ -748,7 +748,7 @@ func TestReadFileFromFAT_InflatedDirectoryEntrySizeIsAnErrorNotAPanic(t *testing
 
 	// Must return an error. A panic here takes down the very tool reached for
 	// when something has already gone wrong.
-	_, err = ReadFileFromFAT(img, "/devcell-diag.log")
+	_, err = ReadFileFromFAT(img, "/winkit-diag.log")
 	require.Error(t, err, "a corrupt directory entry must be reported, not panicked on")
 }
 
@@ -757,7 +757,7 @@ func TestReadFileFromFAT_InflatedDirectoryEntrySizeIsAnErrorNotAPanic(t *testing
 func TestReadFileFromFAT_SurvivesATruncatedImage(t *testing.T) {
 	full := filepath.Join(t.TempDir(), "answer.img")
 	if err := CreateFATImage(full, map[string][]byte{
-		"/devcell-diag.log": []byte(strings.Repeat("diagnostic output\n", 512)),
+		"/winkit-diag.log": []byte(strings.Repeat("diagnostic output\n", 512)),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -771,7 +771,7 @@ func TestReadFileFromFAT_SurvivesATruncatedImage(t *testing.T) {
 	}
 
 	// Must not panic. Either outcome is acceptable; a crash is not.
-	if _, err := ReadFileFromFAT(cut, "/devcell-diag.log"); err != nil {
+	if _, err := ReadFileFromFAT(cut, "/winkit-diag.log"); err != nil {
 		t.Logf("truncated image reported: %v", err)
 	}
 }

@@ -16,7 +16,7 @@ import (
 func VMDocJSON(memMB, cpus int) string {
 	doc := map[string]any{
 		"SchemaVersion":                     map[string]int{"Major": 2, "Minor": 1},
-		"Owner":                             "devcell",
+		"Owner":                             "winkit",
 		"ShouldTerminateOnLastHandleClosed": true,
 		"VirtualMachine": map[string]any{
 			"StopOnReset": true,

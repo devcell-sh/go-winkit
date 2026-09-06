@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,25 @@ type ESDFile struct {
 	Size         int64
 	SHA1         string
 	FilePath     string // Microsoft CDN download URL
+}
+
+// buildFromFilename matches "SERIES.QFE." at the start of an MCT ESD
+// filename, e.g. "26100.4349." from "26100.4349.250607-1500_arm64fre_…".
+var buildFromFilename = regexp.MustCompile(`^(\d{5}\.\d+)\.`)
+
+// ParseBuildFromFilename extracts the build number (e.g. "26100.4349")
+// from an MCT ESD filename. Returns "" if the filename does not match.
+func ParseBuildFromFilename(filename string) string {
+	m := buildFromFilename.FindStringSubmatch(filename)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// BuildNumber returns the build number parsed from the ESD's filename.
+func (e ESDFile) BuildNumber() string {
+	return ParseBuildFromFilename(e.FileName)
 }
 
 type Client struct {

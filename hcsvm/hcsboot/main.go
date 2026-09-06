@@ -1,7 +1,7 @@
 //go:build windows
 
 // hcsboot is the nested-VM smoke test that runs inside a booted
-// devcell.wim. It creates a diskless Gen2 VM through the Host Compute
+// winkit.wim. It creates a diskless Gen2 VM through the Host Compute
 // System API — the same path WSL2 uses — and reports the VM's state as
 // KEY=VALUE markers the host test asserts on:
 //
@@ -60,7 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	id, _ := windows.UTF16PtrFromString("devcell-hcs-test")
+	id, _ := windows.UTF16PtrFromString("winkit-hcs-test")
 	config, _ := windows.UTF16PtrFromString(hcsvm.VMDocJSON(512, 1))
 
 	op, _, _ := procCreateOperation.Call(0, 0)
