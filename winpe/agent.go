@@ -10,22 +10,22 @@ import (
 // ProgressPortName is the virtio-serial port name used for guest-to-host
 // progress reporting. The host must attach a virtserialport with this name;
 // the generated agent scripts open \\.\Global\<name> from inside the guest.
-const ProgressPortName = `devcell.progress.0`
+const ProgressPortName = `winkit.progress.0`
 
 // WinPE payload layout. These files are baked into boot.wim so they exist on
 // the WinPE RAM drive (X:) before setup.exe starts.
 const (
-	// WinPEPayloadDir is where the devcell payload lives inside boot.wim.
-	WinPEPayloadDir = `X:\devcell`
+	// WinPEPayloadDir is where the winkit payload lives inside boot.wim.
+	WinPEPayloadDir = `X:\winkit`
 	// WinPEBootstrapCmdPath is the cmd.exe shim that winpeshl.ini calls.
 	// Stock WinPE lacks powershell.exe; this shim probes volumes for pwsh.exe
 	// (PowerShell 7, xcopy-deployed on the answer volume) and launches the
 	// real bootstrap.ps1 through it.
-	WinPEBootstrapCmdPath = `X:\devcell\bootstrap.cmd`
+	WinPEBootstrapCmdPath = `X:\winkit\bootstrap.cmd`
 	// WinPEBootstrapPath is the PowerShell bootstrap, launched by the cmd shim.
-	WinPEBootstrapPath = `X:\devcell\bootstrap.ps1`
+	WinPEBootstrapPath = `X:\winkit\bootstrap.ps1`
 	// WinPEAgentPath is the control agent, started detached by the bootstrap.
-	WinPEAgentPath = `X:\devcell\agent.ps1`
+	WinPEAgentPath = `X:\winkit\agent.ps1`
 
 	// PwshVolDir is the directory on the answer volume containing PowerShell 7.
 	// Stock WinPE has no PowerShell; pwsh.exe is self-contained and
@@ -35,32 +35,32 @@ const (
 	// AgentVolumeMarker identifies the removable volume carrying the command
 	// and result files. WinPE drive letters are not stable, so the agent
 	// searches for this file instead of assuming a letter.
-	AgentVolumeMarker = `devcell-agent.marker`
+	AgentVolumeMarker = `winkit-agent.marker`
 	// AgentCommandFile holds a single command line for the agent to run.
-	AgentCommandFile = `devcell-cmd.txt`
+	AgentCommandFile = `winkit-cmd.txt`
 	// AgentResultFile receives that command's combined output.
-	AgentResultFile = `devcell-out.txt`
+	AgentResultFile = `winkit-out.txt`
 	// AgentDoneFile is written after the command finishes. The host polls for
 	// this instead of AgentResultFile to avoid reading a half-written output
 	// file (the redirect flushes incrementally, so the file appears non-empty
 	// before diskpart/PowerShell finishes writing).
-	AgentDoneFile = `devcell-done.marker`
+	AgentDoneFile = `winkit-done.marker`
 
 	// AgentScriptName is the agent's filename on the answer volume — the
 	// no-rebake deployment path: a windowsPE RunSynchronous launcher starts
 	// it straight off the volume (AgentLauncherCommand), so boot.wim
 	// never has to be modified.
-	AgentScriptName = `devcell-agent.ps1`
+	AgentScriptName = `winkit-agent.ps1`
 	// SetupActSnapshotName receives the agent's periodic copy of WinPE's
 	// X:\Windows\Panther\setupact.log, which otherwise dies with the RAM
 	// disk (CELL-364).
-	SetupActSnapshotName = `devcell-setupact.log`
+	SetupActSnapshotName = `winkit-setupact.log`
 	// SetupErrSnapshotName receives setuperr.log the same way.
-	SetupErrSnapshotName = `devcell-setuperr.log`
+	SetupErrSnapshotName = `winkit-setuperr.log`
 	// SetupAPISnapshotName receives X:\Windows\INF\setupapi.dev.log, PnP's
 	// full driver-binding trace. drvload.exe has no verbose switch, so this
 	// is the only way to see why a driver did or did not bind.
-	SetupAPISnapshotName = `devcell-setupapi.dev.log`
+	SetupAPISnapshotName = `winkit-setupapi.dev.log`
 
 	// ProgressPortName lives in command.go (where the QEMU device is wired).
 )
@@ -95,27 +95,27 @@ func DriverLoadCommand(inf string) string {
 
 // DiagCommand is the one-shot diagnostic the agent executes when a
 // build ships it as AgentCommand; its combined output lands in
-// devcell-out.txt on the answer volume. Strictly read-only: the first
+// winkit-out.txt on the answer volume. Strictly read-only: the first
 // version drvloaded vioscsi and collided with wpeinit's own $WinPEDriver$
 // load — Setup aborted 0x80070103 ERROR_NO_MORE_ITEMS, run 20260812T143146.
 //
 // Deprecated: prefer DiagScriptCommand, which invokes the proper
 // diagnostics script and waits for completion before the output is read.
-const DiagCommand = `Set-Content X:\devcell-lv.txt "list volume` + "`r`n" + `exit"; & diskpart.exe /s X:\devcell-lv.txt; & reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\vioscsi; Get-ChildItem X:\Windows\Panther, X:\$windows.~bt\Sources\Panther -ErrorAction SilentlyContinue`
+const DiagCommand = `Set-Content X:\winkit-lv.txt "list volume` + "`r`n" + `exit"; & diskpart.exe /s X:\winkit-lv.txt; & reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\vioscsi; Get-ChildItem X:\Windows\Panther, X:\$windows.~bt\Sources\Panther -ErrorAction SilentlyContinue`
 
 const (
 	// DiagScriptName is the diagnostics script shipped on the answer
 	// volume. It follows the same structured-output pattern as
 	// GenerateGuestDiagnosticsScript (guest_diagnostics.go) but runs in
 	// WinPE under PowerShell.
-	DiagScriptName = `devcell-winpe-diag.ps1`
+	DiagScriptName = `winkit-winpe-diag.ps1`
 )
 
 // DiagScriptCommand returns the agent command that invokes the
 // diagnostics script. The agent runs this via Invoke-Expression in
-// PowerShell, so $DevcellVol is expanded from the agent's scope.
+// PowerShell, so $WinkitVol is expanded from the agent's scope.
 func DiagScriptCommand() string {
-	return `& "$DevcellVol\` + DiagScriptName + `" $DevcellVol`
+	return `& "$WinkitVol\` + DiagScriptName + `" $WinkitVol`
 }
 
 // GenerateDiagScript produces the WinPE diagnostics script. It is
@@ -125,13 +125,13 @@ func DiagScriptCommand() string {
 // Three sections:
 //  1. Disk/volume enumeration
 //  2. CIM/PowerShell probes
-//  3. Script access: can we see other devcell scripts on the answer volume
+//  3. Script access: can we see other winkit scripts on the answer volume
 func GenerateDiagScript() []byte {
 	var b strings.Builder
 	b.WriteString("$ErrorActionPreference = 'Continue'\r\n")
 	b.WriteString("$Vol = $args[0]\r\n")
 	b.WriteString("\r\n")
-	b.WriteString("Write-Output '=== DEVCELL WINPE DIAGNOSTICS ==='\r\n")
+	b.WriteString("Write-Output '=== WINKIT WINPE DIAGNOSTICS ==='\r\n")
 	b.WriteString("Write-Output \"$(Get-Date)\"\r\n")
 	b.WriteString("Write-Output \"Volume: $Vol\"\r\n")
 	b.WriteString("Write-Output ''\r\n")
@@ -173,14 +173,14 @@ func GenerateDiagScript() []byte {
 	// ── 1. DISK CHECKS
 	b.WriteString("\r\n")
 	b.WriteString("Write-Output '=== DISKPART VOLUMES ==='\r\n")
-	b.WriteString("Set-Content X:\\devcell-lv.txt \"list volume`r`nexit\"\r\n")
-	b.WriteString("& diskpart.exe /s X:\\devcell-lv.txt\r\n")
+	b.WriteString("Set-Content X:\\winkit-lv.txt \"list volume`r`nexit\"\r\n")
+	b.WriteString("& diskpart.exe /s X:\\winkit-lv.txt\r\n")
 	b.WriteString("Write-Output ''\r\n")
 
 	b.WriteString("\r\n")
 	b.WriteString("Write-Output '=== DISKPART DISKS ==='\r\n")
-	b.WriteString("Set-Content X:\\devcell-ld.txt \"list disk`r`nexit\"\r\n")
-	b.WriteString("& diskpart.exe /s X:\\devcell-ld.txt\r\n")
+	b.WriteString("Set-Content X:\\winkit-ld.txt \"list disk`r`nexit\"\r\n")
+	b.WriteString("& diskpart.exe /s X:\\winkit-ld.txt\r\n")
 	b.WriteString("Write-Output ''\r\n")
 
 	b.WriteString("\r\n")
@@ -235,10 +235,10 @@ func GenerateDiagScript() []byte {
 	b.WriteString("} else {\r\n")
 	b.WriteString("    Get-ChildItem \"$Vol\\\" -ErrorAction SilentlyContinue\r\n")
 	b.WriteString("    Write-Output ''\r\n")
-	b.WriteString("    Write-Output '=== DEVCELL SCRIPTS ==='\r\n")
+	b.WriteString("    Write-Output '=== WINKIT SCRIPTS ==='\r\n")
 	// The bootstrap name is a literal rather than unattend.BootstrapScriptName:
 	// unattend imports winpe, so importing it back here would be a cycle.
-	fmt.Fprintf(&b, "    foreach ($f in @('%s','%s','devcell-bootstrap.ps1','autounattend.xml')) {\r\n",
+	fmt.Fprintf(&b, "    foreach ($f in @('%s','%s','winkit-bootstrap.ps1','autounattend.xml')) {\r\n",
 		AgentScriptName, AgentVolumeMarker)
 	b.WriteString("        if (Test-Path \"$Vol\\$f\") {\r\n")
 	b.WriteString("            Write-Output \"[OK]    $Vol\\$f\"\r\n")
@@ -257,7 +257,7 @@ func GenerateDiagScript() []byte {
 	b.WriteString("Write-Output ''\r\n")
 
 	b.WriteString("\r\n")
-	b.WriteString("Write-Output '=== DEVCELL DIAGNOSTICS COMPLETE ==='\r\n")
+	b.WriteString("Write-Output '=== WINKIT DIAGNOSTICS COMPLETE ==='\r\n")
 
 	return []byte(b.String())
 }
@@ -268,11 +268,11 @@ const (
 	// install.wim from the attached Windows ISO, uses DISM to enable
 	// features offline, loads the offline registry to enable services,
 	// then queries their state after reloading.
-	HyperVDiagScriptName = `devcell-winpe-hyperv-diag.ps1`
+	HyperVDiagScriptName = `winkit-winpe-hyperv-diag.ps1`
 
 	// EchoProbeScriptName is the filename for the COM-port echo
 	// probe + virtiofs write test script.
-	EchoProbeScriptName = `devcell-winpe-echo-probe.ps1`
+	EchoProbeScriptName = `winkit-winpe-echo-probe.ps1`
 )
 
 // DiagToolPaths returns the WIM-internal paths of System32 binaries
@@ -290,7 +290,7 @@ func DiagToolPaths() []string {
 // HyperVDiagScriptCommand returns the agent command that invokes the
 // Hyper-V/WSL2 diagnostics script.
 func HyperVDiagScriptCommand() string {
-	return `& "$DevcellVol\` + HyperVDiagScriptName + `" $DevcellVol`
+	return `& "$WinkitVol\` + HyperVDiagScriptName + `" $WinkitVol`
 }
 
 // GenerateHyperVDiagScript produces a WinPE script that verifies
@@ -314,13 +314,13 @@ func GenerateHyperVDiagScript(progressPort string) []byte {
 
 	serial := func(msg string) {
 		if progressPort != "" {
-			fmt.Fprintf(&b, "\"devcell: %s\" | Out-File -Append '%s' -Encoding utf8\r\n", msg, progressPort)
+			fmt.Fprintf(&b, "\"winkit: %s\" | Out-File -Append '%s' -Encoding utf8\r\n", msg, progressPort)
 		}
 	}
 
 	serial("hyperv-diag-start")
 	b.WriteString("\r\n")
-	b.WriteString("Write-Output '=== DEVCELL HYPERV DIAGNOSTICS ==='\r\n")
+	b.WriteString("Write-Output '=== WINKIT HYPERV DIAGNOSTICS ==='\r\n")
 	b.WriteString("Write-Output \"$(Get-Date)\"\r\n")
 	b.WriteString("Write-Output \"Volume: $Vol\"\r\n")
 	b.WriteString("Write-Output ''\r\n")
@@ -646,7 +646,7 @@ func GenerateHyperVDiagScript(progressPort string) []byte {
 	b.WriteString("Write-Output ''\r\n")
 
 	b.WriteString("\r\n")
-	b.WriteString("Write-Output '=== DEVCELL HYPERV DIAGNOSTICS COMPLETE ==='\r\n")
+	b.WriteString("Write-Output '=== WINKIT HYPERV DIAGNOSTICS COMPLETE ==='\r\n")
 	serial("hyperv-diag-complete")
 
 	return []byte(b.String())
@@ -659,10 +659,17 @@ type PayloadConfig struct {
 	// injection is only needed for extras like virtio-net.
 	DriverINFs []string
 	// ProgressPort is the guest device path for progress reporting. On ARM64
-	// this must be a virtio-serial port (e.g. "\\.\Global\devcell.progress.0")
+	// this must be a virtio-serial port (e.g. "\\.\Global\winkit.progress.0")
 	// because PCI-serial 16550 devices don't map to user-mode COMx. Pair with
 	// Spec.GuestProgressLogPath so the host can read it.
 	ProgressPort string
+	// StructuredPort, when set, makes the agent tee Setup's Panther logs
+	// (setupact/setuperr) to this virtio-serial port as flat JSON lines
+	// ({"ts","event","line","src"}) matching the GuestEvent schema — the
+	// windowsPE phase's only feed into build.jsonl (gosshd starts in
+	// specialize). Opened lazily: the vioserial driver is drvloaded after
+	// the agent starts.
+	StructuredPort string
 	// WPEInit causes the bootstrap to call wpeinit before anything else.
 	// Required when booting WinPE standalone (no setup.exe) — without it,
 	// serial ports and other hardware are not initialized.
@@ -756,7 +763,7 @@ func GenerateBootstrap(cfg PayloadConfig) []byte {
 }
 
 // GenerateAgent produces a PowerShell control agent: a poll loop that
-// snapshots Setup's logs onto the devcell volume and runs one command at a
+// snapshots Setup's logs onto the winkit volume and runs one command at a
 // time, streaming output through Tee-Object to both the result file and the
 // virtio-serial progress port.
 //
@@ -772,6 +779,7 @@ func GenerateAgent(cfg PayloadConfig) []byte {
 
 	data := struct {
 		ProgressPort     string
+		StructuredPort   string
 		VolumeMarker     string
 		CommandFile      string
 		ResultFile       string
@@ -782,6 +790,7 @@ func GenerateAgent(cfg PayloadConfig) []byte {
 		PollSeconds      int
 	}{
 		ProgressPort:     cfg.ProgressPort,
+		StructuredPort:   cfg.StructuredPort,
 		VolumeMarker:     AgentVolumeMarker,
 		CommandFile:      AgentCommandFile,
 		ResultFile:       AgentResultFile,
@@ -800,7 +809,7 @@ func GenerateAgent(cfg PayloadConfig) []byte {
 // EchoProbeScriptCommand returns the agent command that invokes the
 // COM-port echo probe script.
 func EchoProbeScriptCommand() string {
-	return `& "$DevcellVol\` + EchoProbeScriptName + `" $DevcellVol`
+	return `& "$WinkitVol\` + EchoProbeScriptName + `" $WinkitVol`
 }
 
 // GenerateEchoProbeScript produces a WinPE PowerShell script that:
@@ -811,7 +820,7 @@ func EchoProbeScriptCommand() string {
 //
 // The answer volume path is passed as $args[0].
 // viofs driver files and virtiofs.exe are expected under $Vol\drivers\viofs\.
-// The virtiofs tag must match Spec.VirtioFSTag (default "devcell-logs").
+// The virtiofs tag must match Spec.VirtioFSTag (default "winkit-logs").
 func GenerateEchoProbeScript(viofsTag string) []byte {
 	var b strings.Builder
 	b.WriteString("$ErrorActionPreference = 'Continue'\r\n")
@@ -821,7 +830,7 @@ func GenerateEchoProbeScript(viofsTag string) []byte {
 	// Section 1: COM port probe
 	b.WriteString("Write-Output '===== COM PORT PROBE ====='\r\n")
 	for i := 1; i <= 4; i++ {
-		marker := fmt.Sprintf("DEVCELL_COM_ECHO_COM%d", i)
+		marker := fmt.Sprintf("WINKIT_COM_ECHO_COM%d", i)
 		fmt.Fprintf(&b, "try {\r\n")
 		fmt.Fprintf(&b, "    [System.IO.File]::WriteAllText('COM%d', '%s')\r\n", i, marker)
 		fmt.Fprintf(&b, "    Write-Output 'COM%d: OK'\r\n", i)
@@ -852,7 +861,7 @@ func GenerateEchoProbeScript(viofsTag string) []byte {
 	b.WriteString("        Write-Output 'virtiofs mount: FAILED'\r\n")
 	b.WriteString("    } else {\r\n")
 	b.WriteString("        Write-Output 'virtiofs mount: OK'\r\n")
-	fmt.Fprintf(&b, "        Set-Content '%s\\viofs-probe.txt' 'DEVCELL_VIOFS_HELLO'\r\n", mountLetter)
+	fmt.Fprintf(&b, "        Set-Content '%s\\viofs-probe.txt' 'WINKIT_VIOFS_HELLO'\r\n", mountLetter)
 	fmt.Fprintf(&b, "        if (Test-Path '%s\\viofs-probe.txt') {\r\n", mountLetter)
 	b.WriteString("            Write-Output 'viofs write: OK'\r\n")
 	b.WriteString("        } else {\r\n")
@@ -865,7 +874,7 @@ func GenerateEchoProbeScript(viofsTag string) []byte {
 	b.WriteString("Write-Output '===== VIOFS DONE ====='\r\n")
 	b.WriteString("\r\n")
 
-	b.WriteString("Write-Output 'DEVCELL ECHO PROBE COMPLETE'\r\n")
+	b.WriteString("Write-Output 'WINKIT ECHO PROBE COMPLETE'\r\n")
 
 	// go-diskfs v1.9.4 records the cluster-rounded size in the directory
 	// entry instead of the actual file size, so reads return trailing
@@ -885,5 +894,5 @@ func psProgressLine(cfg PayloadConfig, msg string) string {
 	if cfg.ProgressPort == "" {
 		return ""
 	}
-	return fmt.Sprintf("\"devcell: %s\" | Out-File -Append '%s' -Encoding utf8\r\n", msg, cfg.ProgressPort)
+	return fmt.Sprintf("\"winkit: %s\" | Out-File -Append '%s' -Encoding utf8\r\n", msg, cfg.ProgressPort)
 }

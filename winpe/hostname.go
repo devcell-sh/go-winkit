@@ -5,13 +5,13 @@ import "strings"
 // NetBIOSNameMax is the hard limit on a Windows computer name.
 const NetBIOSNameMax = 15
 
-const defaultGuestHostname = "devcell"
+const defaultGuestHostname = "winkit"
 
 // GuestHostname derives the guest's ComputerName from a cell ID.
 //
 // It sanitizes the input for NetBIOS: forbidden characters become dashes,
 // runs of dashes collapse, and the result is truncated to 15 characters.
-// An empty or fully-sanitized-away input returns "devcell".
+// An empty or fully-sanitized-away input returns "winkit".
 func GuestHostname(cellID string) string {
 	clean := strings.Map(func(r rune) rune {
 		switch r {

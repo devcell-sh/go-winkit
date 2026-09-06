@@ -4,14 +4,14 @@ $ErrorActionPreference = 'Continue'
 
 Write-Output '{{.Banner}}'
 Write-Output (Get-Date -Format o)
-devcell-json @{ event = 'hcs_start' }
+winkit-json @{ event = 'hcs_start' }
 
 {{template "vmp-registration" .}}
 
 # --- hypervisor and Vid diagnostics ----------------------------------------
 $hvPresent = (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
 Write-Output "HYPERVISOR_PRESENT=$hvPresent"
-devcell-json @{ event = 'hypervisor'; present = "$hvPresent" }
+winkit-json @{ event = 'hypervisor'; present = "$hvPresent" }
 
 # Probe the actual hypervisor identity via registry keys that winload and
 # the kernel populate when a hypervisor is detected or launched.
@@ -81,7 +81,7 @@ $vidDevices = @(Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 
 Write-Output "VID_PNP_DEVICES=$($vidDevices.Count)"
 foreach ($d in $vidDevices) { Write-Output "  PNP: $($d.Name) Status=$($d.Status)" }
 
-devcell-json @{ event = 'vid_diag'; status = "$($vidSvc.Status)"; hvEvents = $hvEvents.Count; vidEvents = $vidEvents.Count; hvVendor = "$hvVendor" }
+winkit-json @{ event = 'vid_diag'; status = "$($vidSvc.Status)"; hvEvents = $hvEvents.Count; vidEvents = $vidEvents.Count; hvVendor = "$hvVendor" }
 
 # --- vmcompute ------------------------------------------------------------
 # The Host Compute Service is the front door for every VM operation. It was
@@ -89,10 +89,10 @@ devcell-json @{ event = 'vid_diag'; status = "$($vidSvc.Status)"; hvEvents = $hv
 try {
     Start-Service -Name vmcompute -ErrorAction Stop
     Write-Output 'VMCOMPUTE_START=OK'
-    devcell-json @{ event = 'vmcompute'; status = 'ok' }
+    winkit-json @{ event = 'vmcompute'; status = 'ok' }
 } catch {
     Write-Output "VMCOMPUTE_START=$($_.Exception.Message)"
-    devcell-json @{ event = 'vmcompute'; status = 'fail'; error = "$($_.Exception.Message)" }
+    winkit-json @{ event = 'vmcompute'; status = 'fail'; error = "$($_.Exception.Message)" }
 }
 
 # --- vmms (thumbnail only, tolerated-absent) ------------------------------
@@ -110,20 +110,20 @@ if (Test-Path $vmmsExe) {
 
     & mofcomp (Join-Path $env:SystemRoot 'System32\WindowsVirtualization.V2.mof') 2>&1 | Out-Null
     Write-Output "MOFCOMP_EXIT=$LASTEXITCODE"
-    devcell-json @{ event = 'mofcomp'; exit = $LASTEXITCODE }
+    winkit-json @{ event = 'mofcomp'; exit = $LASTEXITCODE }
 
     try {
         Start-Service -Name vmms -ErrorAction Stop
         Write-Output 'VMMS_START=OK'
-        devcell-json @{ event = 'vmms'; status = 'ok' }
+        winkit-json @{ event = 'vmms'; status = 'ok' }
     } catch {
         Write-Output "VMMS_START=$($_.Exception.Message)"
-        devcell-json @{ event = 'vmms'; status = 'fail'; error = "$($_.Exception.Message)" }
+        winkit-json @{ event = 'vmms'; status = 'fail'; error = "$($_.Exception.Message)" }
     }
 } else {
     Write-Output 'VMMS_START=ABSENT'
     Write-Output 'MOFCOMP_EXIT=ABSENT'
-    devcell-json @{ event = 'vmms'; status = 'absent' }
+    winkit-json @{ event = 'vmms'; status = 'absent' }
 }
 
 # --- HCS nested-VM smoke test ---------------------------------------------
@@ -131,9 +131,9 @@ if (Test-Path $vmmsExe) {
 # runs detached so the thumbnail can be taken while the guest UEFI is still
 # on screen; its output is replayed into ours afterwards.
 $hcsOut = Join-Path $env:TEMP 'hcsboot.out'
-$p = Start-Process -FilePath "$DevcellVol\hcsboot.exe" -ArgumentList '90' `
+$p = Start-Process -FilePath "$WinkitVol\hcsboot.exe" -ArgumentList '90' `
     -RedirectStandardOutput $hcsOut -PassThru -NoNewWindow
-devcell-json @{ event = 'hcsboot_spawn'; pid = $p.Id }
+winkit-json @{ event = 'hcsboot_spawn'; pid = $p.Id }
 
 $deadline = (Get-Date).AddMinutes(25)
 while ((Get-Date) -lt $deadline) {
@@ -145,27 +145,27 @@ while ((Get-Date) -lt $deadline) {
 # --- thumbnail while the VM lives -----------------------------------------
 try {
     $vsms = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_VirtualSystemManagementService -ErrorAction Stop
-    $vm = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='devcell-hcs-test'" -ErrorAction Stop
+    $vm = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='winkit-hcs-test'" -ErrorAction Stop
     if ($null -eq $vm) { throw 'VM not visible in WMI' }
     $r = Invoke-CimMethod -InputObject $vsms -MethodName GetVirtualSystemThumbnailImage `
         -Arguments @{ TargetSystem = $vm; WidthPixels = 640; HeightPixels = 480 } -ErrorAction Stop
     if ($r.ImageData) {
-        [System.IO.File]::WriteAllBytes("$DevcellVol\hcs-thumbnail.rgb565", [byte[]]$r.ImageData)
+        [System.IO.File]::WriteAllBytes("$WinkitVol\hcs-thumbnail.rgb565", [byte[]]$r.ImageData)
         Write-Output "THUMBNAIL=OK bytes=$($r.ImageData.Length)"
-        devcell-json @{ event = 'thumbnail'; bytes = $r.ImageData.Length }
+        winkit-json @{ event = 'thumbnail'; bytes = $r.ImageData.Length }
     } else {
         Write-Output "THUMBNAIL=EMPTY ret=$($r.ReturnValue)"
     }
 } catch {
     Write-Output "THUMBNAIL=$($_.Exception.Message)"
-    devcell-json @{ event = 'thumbnail'; status = 'fail'; error = "$($_.Exception.Message)" }
+    winkit-json @{ event = 'thumbnail'; status = 'fail'; error = "$($_.Exception.Message)" }
 }
 
 if (-not $p.HasExited) { $p.WaitForExit(600000) | Out-Null }
 if (Test-Path $hcsOut) { Get-Content $hcsOut | Write-Output }
 Write-Output "HCSBOOT_EXIT=$($p.ExitCode)"
-devcell-json @{ event = 'hcsboot_exit'; exit = $p.ExitCode }
+winkit-json @{ event = 'hcsboot_exit'; exit = $p.ExitCode }
 
 Write-Output '{{.Complete}}'
-devcell-json @{ event = 'hcs_complete' }
+winkit-json @{ event = 'hcs_complete' }
 if ($structStream) { $structStream.Flush(); $structStream.Close() }

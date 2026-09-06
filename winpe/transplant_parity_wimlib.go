@@ -77,7 +77,7 @@ func ExtractParityFiles(donorWimPath string, files []ParityFile, destDir string)
 	}
 	defer wim.Close()
 
-	staging, err := os.MkdirTemp("", "devcell-parity-*")
+	staging, err := os.MkdirTemp("", "winkit-parity-*")
 	if err != nil {
 		return fmt.Errorf("staging dir: %w", err)
 	}
@@ -86,15 +86,23 @@ func ExtractParityFiles(donorWimPath string, files []ParityFile, destDir string)
 	for _, f := range files {
 		basename := filepath.Base(filepath.FromSlash(f.Dest))
 
+		// Prefer an inbox System32 copy: the hypervisor binaries (hvaa64.exe,
+		// hvloader.dll) ship materialized even with VMP disabled and match no
+		// WinSxS component name. Only fall back to the component store for the
+		// VMP-only files that System32 lacks.
+		sysPath := `\` + strings.ReplaceAll(f.Dest, "/", `\`)
 		var wimPath string
-		if f.Component != "" {
+		switch {
+		case existsInImage(wim, 1, sysPath):
+			wimPath = sysPath
+		case f.Component != "":
 			resolved, err := resolveWinSxS(wim, 1, f.Component, basename, f.SxSFile)
 			if err != nil {
 				return fmt.Errorf("%s: %w", f.Dest, err)
 			}
 			wimPath = resolved
-		} else {
-			wimPath = `\` + strings.ReplaceAll(f.Dest, "/", `\`)
+		default:
+			wimPath = sysPath
 		}
 
 		// Extract to a per-file staging dir to avoid collisions from

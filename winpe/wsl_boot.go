@@ -8,10 +8,10 @@ import (
 
 const (
 	// WSLBootScriptName is the pass4 script's filename on the agent volume.
-	WSLBootScriptName = `devcell-wsl-boot.ps1`
+	WSLBootScriptName = `winkit-wsl-boot.ps1`
 
-	WSLBootBanner   = `=== DEVCELL WSL BOOT ===`
-	WSLBootComplete = `=== DEVCELL WSL BOOT COMPLETE ===`
+	WSLBootBanner   = `=== WINKIT WSL BOOT ===`
+	WSLBootComplete = `=== WINKIT WSL BOOT COMPLETE ===`
 
 	// WSLDistroName is the smoke-test distro registered by the pass4 script.
 	WSLDistroName = `alpine`
@@ -23,7 +23,7 @@ const (
 
 // WSLBootScriptCommand is the agent command line that runs the pass4 script.
 func WSLBootScriptCommand() string {
-	return `& "$DevcellVol\` + WSLBootScriptName + `" $DevcellVol`
+	return `& "$WinkitVol\` + WSLBootScriptName + `" $WinkitVol`
 }
 
 // GenerateWSLBootScript produces the pass4 script: run the VMP runtime

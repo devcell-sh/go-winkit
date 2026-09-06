@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Stop'
 {{template "find-virtio-cd"}}
 $exe = Join-Path $cd 'viofs\w11\ARM64\virtiofs.exe'
-$dst = 'C:\devcell\virtiofs.exe'
-New-Item -ItemType Directory -Path C:\devcell -Force | Out-Null
+$dst = 'C:\winkit\virtiofs.exe'
+New-Item -ItemType Directory -Path C:\winkit -Force | Out-Null
 Copy-Item $exe $dst -Force
 # What actually exists on this guest — the answer to any dependency question.
 Get-Service | Where-Object { $_.Name -match 'Fsp|Vio|virtio' } | ForEach-Object { Write-Output ('svc: ' + $_.Name + ' = ' + $_.Status) }

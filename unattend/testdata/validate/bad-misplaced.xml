@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Deployment">
+      <ComputerName>devcell-win</ComputerName>
+    </component>
+  </settings>
+</unattend>

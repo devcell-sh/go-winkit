@@ -52,7 +52,7 @@ func main() {
 		{"devenv--virtiofs-mount.ps1", templates.Render("devenv/virtiofs-mount.ps1.tmpl", struct {
 			Tag   string
 			Drive string
-		}{"devcell-project", "Z"})},
+		}{"winkit-project", "Z"})},
 		{"devenv--virtualization-probe.ps1", templates.Render("devenv/virtualization-probe.ps1.tmpl", nil)},
 		{"devenv--wsl2-enable.ps1", templates.Render("devenv/wsl2-enable.ps1.tmpl", nil)},
 		{"devenv--wsl-engine-install.ps1", templates.Render("devenv/wsl-engine-install.ps1.tmpl", nil)},
@@ -78,6 +78,12 @@ func main() {
 			SSHPubKey:      "ssh-ed25519 AAAA_PLACEHOLDER_KEY",
 			Hostname:       "DEVCELL-TEST",
 			OpenSSHPayload: "openssh-arm64.zip",
+			SFTPPort:       9844,
+			SFTPUser:       "winkit",
+			SFTPPassword:   "winkit",
+			SFTPDrive:      "W",
+			RclonePayload:  unattend.RclonePayloadName,
+			WinFspPayload:  unattend.WinFspPayloadName,
 		}))},
 	}
 

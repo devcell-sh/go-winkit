@@ -4,33 +4,33 @@ $ErrorActionPreference = 'Continue'
 
 Write-Output '{{.Banner}}'
 Write-Output (Get-Date -Format o)
-devcell-json @{ event = 'keepalive_start' }
+winkit-json @{ event = 'keepalive_start' }
 
 # --- channel 1: host -> guest file transfer on the FAT volume -------------
 # The host wrote this before boot. Reading it back verbatim is the proof
 # that a changed file on the host reaches the guest on the next run, which
 # is the whole basis of the change/restart loop.
-$probe = Join-Path $DevcellVol '{{.ProbeFile}}'
+$probe = Join-Path $WinkitVol '{{.ProbeFile}}'
 if (Test-Path $probe) {
     $content = (Get-Content $probe -Raw).Trim()
     Write-Output "PROBE_FILE=$content"
-    devcell-json @{ event = 'probe_file'; content = $content }
+    winkit-json @{ event = 'probe_file'; content = $content }
 } else {
     Write-Output "PROBE_FILE=MISSING $probe"
-    devcell-json @{ event = 'probe_file'; status = 'missing' }
+    winkit-json @{ event = 'probe_file'; status = 'missing' }
 }
 
 # --- channel 2: the agent shell -------------------------------------------
 Write-Output 'PROBE_SHELL=OK'
 Write-Output "PROBE_PWSH=$($PSVersionTable.PSVersion)"
-Write-Output "PROBE_VOL=$DevcellVol"
-devcell-json @{ event = 'probe_shell'; pwsh = "$($PSVersionTable.PSVersion)" }
+Write-Output "PROBE_VOL=$WinkitVol"
+winkit-json @{ event = 'probe_shell'; pwsh = "$($PSVersionTable.PSVersion)" }
 
 # --- starting state to debug from -----------------------------------------
 $hv = 'UNKNOWN'
 try { $hv = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).HypervisorPresent } catch { }
 Write-Output "HYPERVISOR_PRESENT=$hv"
-devcell-json @{ event = 'hypervisor'; present = "$hv" }
+winkit-json @{ event = 'hypervisor'; present = "$hv" }
 
 # The Storage module's volume cmdlets are absent from WinPE: calling one is
 # a command-not-found, and that is terminating even under
@@ -49,5 +49,5 @@ try {
 {{template "gosshd-serve" .}}
 
 Write-Output '{{.Banner}} READY'
-devcell-json @{ event = 'keepalive_ready' }
+winkit-json @{ event = 'keepalive_ready' }
 if ($structStream) { $structStream.Flush(); $structStream.Close() }

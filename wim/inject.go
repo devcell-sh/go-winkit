@@ -10,7 +10,7 @@ import (
 )
 
 // PatchDevcellWim applies registry patches to an on-disk WIM file (typically
-// devcell.wim after DISM offline servicing). This is the host-side post-step
+// winkit.wim after DISM offline servicing). This is the host-side post-step
 // that sets correct Start values for services created or updated by DISM.
 func PatchDevcellWim(wimPath string, imageNum int, registryPatches ...RegistryPatch) error {
 	if !wimlib.Available() {
@@ -69,8 +69,8 @@ func InjectWinPEPayload(bootWimPath, injectDir string, registryPatches ...Regist
 		return fmt.Errorf("adding winpeshl.ini: %w", err)
 	}
 
-	if err := wim.UpdateImageAddTree(imageNum, injectDir, `\devcell`); err != nil {
-		return fmt.Errorf("adding devcell tree: %w", err)
+	if err := wim.UpdateImageAddTree(imageNum, injectDir, `\winkit`); err != nil {
+		return fmt.Errorf("adding winkit tree: %w", err)
 	}
 
 	for _, rp := range registryPatches {

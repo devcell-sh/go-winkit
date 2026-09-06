@@ -1,16 +1,16 @@
 $ErrorActionPreference = 'Continue'
 
-$DevcellVol = if ($args.Count -gt 0) { $args[0] } else { $null }
+$WinkitVol = if ($args.Count -gt 0) { $args[0] } else { $null }
 
-# Find the devcell volume by marker file.
-while (-not $DevcellVol) {
+# Find the winkit volume by marker file.
+while (-not $WinkitVol) {
     foreach ($d in 'C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','Y','Z') {
-        if (Test-Path "${d}:\{{.VolumeMarker}}") { $DevcellVol = "${d}:"; break }
+        if (Test-Path "${d}:\{{.VolumeMarker}}") { $WinkitVol = "${d}:"; break }
     }
-    if (-not $DevcellVol) { Start-Sleep -Seconds {{.PollSeconds}} }
+    if (-not $WinkitVol) { Start-Sleep -Seconds {{.PollSeconds}} }
 }
 {{- if .ProgressPort}}
-"devcell: agent-volume $DevcellVol" | Out-File -Append '{{.ProgressPort}}' -Encoding utf8
+"winkit: agent-volume $WinkitVol" | Out-File -Append '{{.ProgressPort}}' -Encoding utf8
 {{- end}}
 
 {{- if .ProgressPort}}
@@ -25,38 +25,107 @@ try {
 } catch { }
 {{- end}}
 
-function devcell-progress([string]$msg) {
+function winkit-progress([string]$msg) {
 {{- if .ProgressPort}}
     if ($progressStream) {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes("devcell: $msg`n")
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("winkit: $msg`n")
         $progressStream.Write($bytes, 0, $bytes.Length)
         $progressStream.Flush()
     }
 {{- end}}
 }
+{{- if .StructuredPort}}
+
+# Structured JSON tee to the host (lands in build.jsonl). Opened lazily and
+# retried every poll: the vioserial driver is drvloaded after this agent
+# starts, so the port device does not exist yet on the first attempts.
+$script:structStream = $null
+function winkit-struct-open {
+    if ($script:structStream) { return $true }
+    try {
+        $script:structStream = [System.IO.File]::Open('{{.StructuredPort}}',
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::ReadWrite)
+        winkit-progress 'structured port open'
+        return $true
+    } catch { return $false }
+}
+
+# Incremental tail of a Setup log: re-read the whole file (RAM disk, cheap),
+# emit only lines past the per-path cursor as flat GuestEvent JSON. The
+# StreamReader BOM-detects, which copes with Setup's UTF-16/ANSI mix. The
+# last element of the split is either "" (file ended with a newline) or a
+# partial line still being written — never emitted, the cursor stops before
+# it, so it is re-examined complete on the next poll.
+$script:logCursor = @{}
+function winkit-tee-log([string]$path, [string]$eventName) {
+    if (-not (winkit-struct-open)) { return }
+    if (-not (Test-Path $path -ErrorAction SilentlyContinue)) { return }
+    $text = $null
+    try {
+        $fs = [System.IO.File]::Open($path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite)
+        try {
+            $sr = New-Object System.IO.StreamReader($fs, $true)
+            $text = $sr.ReadToEnd()
+        } finally { $fs.Close() }
+    } catch { return }
+    $lines = $text -split "`r`n|`n"
+    $seen = 0
+    if ($script:logCursor.ContainsKey($path)) { $seen = $script:logCursor[$path] }
+    if ($lines.Count -lt $seen) { $seen = 0 }  # log rotated/truncated
+    for ($i = $seen; $i -lt $lines.Count - 1; $i++) {
+        if (-not $lines[$i]) { continue }
+        $json = @{
+            ts    = (Get-Date).ToUniversalTime().ToString('o')
+            event = $eventName
+            line  = $lines[$i]
+            src   = $path
+        } | ConvertTo-Json -Compress
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("$json`n")
+        $script:structStream.Write($bytes, 0, $bytes.Length)
+    }
+    if ($lines.Count - 1 -gt $seen) {
+        $script:logCursor[$path] = $lines.Count - 1
+        $script:structStream.Flush()
+    }
+}
+{{- end}}
 
 # Poll loop.
 while ($true) {
 
     # Snapshot Setup's logs.
-    Copy-Item 'X:\Windows\Panther\setupact.log' "$DevcellVol\{{.SetupActSnapshot}}" -Force -ErrorAction SilentlyContinue
-    Copy-Item 'X:\Windows\Panther\setuperr.log' "$DevcellVol\{{.SetupErrSnapshot}}" -Force -ErrorAction SilentlyContinue
-    Copy-Item 'X:\$windows.~bt\Sources\Panther\setupact.log' "$DevcellVol\{{.SetupActSnapshot}}" -Force -ErrorAction SilentlyContinue
-    Copy-Item 'X:\$windows.~bt\Sources\Panther\setuperr.log' "$DevcellVol\{{.SetupErrSnapshot}}" -Force -ErrorAction SilentlyContinue
+    Copy-Item 'X:\Windows\Panther\setupact.log' "$WinkitVol\{{.SetupActSnapshot}}" -Force -ErrorAction SilentlyContinue
+    Copy-Item 'X:\Windows\Panther\setuperr.log' "$WinkitVol\{{.SetupErrSnapshot}}" -Force -ErrorAction SilentlyContinue
+    Copy-Item 'X:\$windows.~bt\Sources\Panther\setupact.log' "$WinkitVol\{{.SetupActSnapshot}}" -Force -ErrorAction SilentlyContinue
+    Copy-Item 'X:\$windows.~bt\Sources\Panther\setuperr.log' "$WinkitVol\{{.SetupErrSnapshot}}" -Force -ErrorAction SilentlyContinue
 
     # PnP's driver-binding trace. drvload.exe has no verbose switch, so this
     # is the only record of which INF matched which device and why.
-    Copy-Item 'X:\Windows\INF\setupapi.dev.log' "$DevcellVol\{{.SetupAPISnapshot}}" -Force -ErrorAction SilentlyContinue
+    Copy-Item 'X:\Windows\INF\setupapi.dev.log' "$WinkitVol\{{.SetupAPISnapshot}}" -Force -ErrorAction SilentlyContinue
+{{- if .StructuredPort}}
+
+    # Live tee of Setup's logs to the host build.jsonl — the snapshots above
+    # are only readable after QEMU exits; this is the during-install view.
+    winkit-tee-log 'X:\Windows\Panther\setupact.log' 'setupact'
+    winkit-tee-log 'X:\Windows\Panther\setuperr.log' 'setuperr'
+    winkit-tee-log 'X:\$windows.~bt\Sources\Panther\setupact.log' 'setupact'
+    winkit-tee-log 'X:\$windows.~bt\Sources\Panther\setuperr.log' 'setuperr'
+{{- end}}
 
     # Check for a command file.
-    $cmdFile = "$DevcellVol\{{.CommandFile}}"
+    $cmdFile = "$WinkitVol\{{.CommandFile}}"
     if (Test-Path $cmdFile) {
-        $devcellCmd = (Get-Content $cmdFile -Raw).Trim()
+        $winkitCmd = (Get-Content $cmdFile -Raw).Trim()
         Remove-Item $cmdFile -Force
-        $resultFile = "$DevcellVol\{{.ResultFile}}"
+        $resultFile = "$WinkitVol\{{.ResultFile}}"
         try {
 {{- if .ProgressPort}}
-            Invoke-Expression $devcellCmd 2>&1 | Tee-Object -FilePath $resultFile | ForEach-Object {
+            Invoke-Expression $winkitCmd 2>&1 | Tee-Object -FilePath $resultFile | ForEach-Object {
                 if ($progressStream) {
                     $bytes = [System.Text.Encoding]::UTF8.GetBytes("$_`n")
                     $progressStream.Write($bytes, 0, $bytes.Length)
@@ -65,16 +134,16 @@ while ($true) {
                 $_
             }
 {{- else}}
-            Invoke-Expression $devcellCmd 2>&1 | Set-Content $resultFile -Encoding UTF8
+            Invoke-Expression $winkitCmd 2>&1 | Set-Content $resultFile -Encoding UTF8
 {{- end}}
         } catch {
             # Stream it first: the result file is only readable once QEMU
             # exits, so an error that lands there alone looks like a hang.
-            devcell-progress "command failed: $($_.Exception.Message)"
+            winkit-progress "command failed: $($_.Exception.Message)"
             "ERROR: $($_.Exception.Message)" | Set-Content $resultFile -Encoding UTF8
         }
-        'done' | Set-Content "$DevcellVol\{{.DoneFile}}" -Encoding UTF8
-        devcell-progress "ran $devcellCmd"
+        'done' | Set-Content "$WinkitVol\{{.DoneFile}}" -Encoding UTF8
+        winkit-progress "ran $winkitCmd"
     }
 
     Start-Sleep -Seconds {{.PollSeconds}}

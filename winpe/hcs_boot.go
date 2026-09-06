@@ -8,7 +8,7 @@ import (
 
 const (
 	// HCSBootScriptName is the pass3 script's filename on the agent volume.
-	HCSBootScriptName = `devcell-hcs-boot.ps1`
+	HCSBootScriptName = `winkit-hcs-boot.ps1`
 
 	// HCSBootExeName is the nested-VM smoke test binary, cross-compiled
 	// from internal/hcsvm/hcsboot and shipped on the shared volume.
@@ -24,7 +24,7 @@ const (
 
 // HCSBootScriptCommand is the agent command line that runs the pass3 script.
 func HCSBootScriptCommand() string {
-	return `& "$DevcellVol\` + HCSBootScriptName + `" $DevcellVol`
+	return `& "$WinkitVol\` + HCSBootScriptName + `" $WinkitVol`
 }
 
 // GenerateHCSBootScript produces the pass3 script: register the runtime

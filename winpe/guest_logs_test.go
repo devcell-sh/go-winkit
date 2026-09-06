@@ -12,9 +12,9 @@ import (
 func TestCollectGuestLogs_ReturnsEveryLogTheGuestWrote(t *testing.T) {
 	img := filepath.Join(t.TempDir(), "answer.img")
 	require.NoError(t, isokit.CreateFATImage(img, map[string][]byte{
-		"/" + BootstrapLogName:        []byte("devcell-bootstrap: starting"),
+		"/" + BootstrapLogName:        []byte("winkit-bootstrap: starting"),
 		"/" + GuestDiagnosticsLogName: []byte("=== NETWORK ADAPTERS ==="),
-		"/" + SetupActSnapshotName:             []byte("setupact contents"),
+		"/" + SetupActSnapshotName:    []byte("setupact contents"),
 	}))
 
 	logs := CollectGuestLogs(img)
@@ -26,7 +26,7 @@ func TestCollectGuestLogs_ReturnsEveryLogTheGuestWrote(t *testing.T) {
 	require.Contains(t, byName, BootstrapLogName)
 	require.Contains(t, byName, GuestDiagnosticsLogName)
 	require.Contains(t, byName, SetupActSnapshotName)
-	require.Equal(t, "devcell-bootstrap: starting", string(byName[BootstrapLogName].Content))
+	require.Equal(t, "winkit-bootstrap: starting", string(byName[BootstrapLogName].Content))
 	require.NoError(t, byName[BootstrapLogName].Err)
 }
 
@@ -62,26 +62,26 @@ func TestGuestLogNames_CoverWinPEAndFirstLogonChannels(t *testing.T) {
 
 func TestFormatGuestLogs_RendersContentAndAbsence(t *testing.T) {
 	out := FormatGuestLogs([]GuestLog{
-		{Name: "devcell-bootstrap.log", Content: []byte("line one\nline two")},
-		{Name: "devcell-diag.log", Err: ErrNoSuchGuestLog},
+		{Name: "winkit-bootstrap.log", Content: []byte("line one\nline two")},
+		{Name: "winkit-diag.log", Err: ErrNoSuchGuestLog},
 	})
 
-	require.Contains(t, out, "devcell-bootstrap.log")
+	require.Contains(t, out, "winkit-bootstrap.log")
 	require.Contains(t, out, "line two")
-	require.Contains(t, out, "devcell-diag.log")
+	require.Contains(t, out, "winkit-diag.log")
 	require.True(t, strings.Contains(out, "not written by the guest"),
 		"absence must be stated in words, not left blank: %s", out)
 }
 
 func TestParseBootstrapSteps_SeparatesOkFromFailed(t *testing.T) {
 	transcript := strings.Join([]string{
-		"devcell-bootstrap: starting (answer volume: D:)",
-		"devcell-bootstrap: step: install OpenSSH server",
-		"devcell-bootstrap: ok: install OpenSSH server",
-		"devcell-bootstrap: step: start sshd",
-		"devcell-bootstrap: FAILED: start sshd -- service did not start",
-		"devcell-bootstrap: step: open the firewall for SSH",
-		"devcell-bootstrap: ok: open the firewall for SSH",
+		"winkit-bootstrap: starting (answer volume: D:)",
+		"winkit-bootstrap: step: install OpenSSH server",
+		"winkit-bootstrap: ok: install OpenSSH server",
+		"winkit-bootstrap: step: start sshd",
+		"winkit-bootstrap: FAILED: start sshd -- service did not start",
+		"winkit-bootstrap: step: open the firewall for SSH",
+		"winkit-bootstrap: ok: open the firewall for SSH",
 	}, "\r\n")
 
 	steps := ParseBootstrapSteps(transcript)
@@ -92,7 +92,7 @@ func TestParseBootstrapSteps_SeparatesOkFromFailed(t *testing.T) {
 }
 
 func TestParseBootstrapSteps_ReportsStepsThatNeverFinished(t *testing.T) {
-	transcript := "devcell-bootstrap: step: install OpenSSH server\r\n"
+	transcript := "winkit-bootstrap: step: install OpenSSH server\r\n"
 
 	steps := ParseBootstrapSteps(transcript)
 
@@ -102,13 +102,13 @@ func TestParseBootstrapSteps_ReportsStepsThatNeverFinished(t *testing.T) {
 }
 
 func TestBootstrapSteps_SSHReadyRequiresSshdStarted(t *testing.T) {
-	partial := ParseBootstrapSteps("devcell-bootstrap: ok: install OpenSSH server\r\n")
+	partial := ParseBootstrapSteps("winkit-bootstrap: ok: install OpenSSH server\r\n")
 	require.False(t, partial.SSHReady(), "installing OpenSSH is not the same as running it")
 
 	full := ParseBootstrapSteps(strings.Join([]string{
-		"devcell-bootstrap: ok: install OpenSSH server",
-		"devcell-bootstrap: ok: authorize SSH key for administrators",
-		"devcell-bootstrap: ok: start sshd",
+		"winkit-bootstrap: ok: install OpenSSH server",
+		"winkit-bootstrap: ok: authorize SSH key for administrators",
+		"winkit-bootstrap: ok: start sshd",
 	}, "\r\n"))
 	require.True(t, full.SSHReady())
 }

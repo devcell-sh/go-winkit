@@ -19,6 +19,10 @@ type Config struct {
 	Password      string
 	Locale        string
 	Hostname      string
+	// DistroName is the WSL1 distro name used for import and all wsl.exe -d
+	// invocations. Defaults to "winkit". The bootstrap template, verify
+	// functions, and PS1 prompt all derive from this.
+	DistroName string
 	VirtIODrivers []VirtIODriver
 	SSHPubKey     string
 	TimeZone      string
@@ -51,6 +55,90 @@ type Config struct {
 	// scanning back from the end, and unexpected trailing bytes make that
 	// inconsistent. The guest truncates to this length before extracting.
 	OpenSSHPayloadSize int
+	// GosshdBinaryName is the filename of the gosshd server binary shipped on
+	// the answer volume, empty when none is used. gosshd is the wsl2 build's
+	// dedicated provisioning SSH: specialize copies it to C: and registers an
+	// onstart SYSTEM task, so a reachable channel exists before (and
+	// independent of) the fragile first-logon bootstrap that installs the
+	// Windows OpenSSH the delivered image ships on :22. It travels as an
+	// exact (unpadded) file — a PE image tolerates trailing zeros, but the
+	// scheduled task launches it by name, so keeping it byte-exact avoids any
+	// surprise.
+	GosshdBinaryName string
+	// GosshdBinaryData is the gosshd binary's bytes, written to the answer
+	// volume by BuildAnswerVolume.
+	GosshdBinaryData []byte
+	// GosshdListenAddr is the address the specialize-registered gosshd task
+	// listens on, e.g. ":2222". It is a non-standard port on purpose so the
+	// provisioning gosshd coexists with the Windows OpenSSH the image ships on
+	// :22. Empty falls back to DefaultGosshdListenAddr.
+	GosshdListenAddr string
+	// GosshdVsockPort, when non-zero, adds -vsock-port <N> to the gosshd
+	// launch command so it listens on a vsock port alongside TCP. Used by the
+	// vz backend where NAT port forwarding is unavailable.
+	GosshdVsockPort uint32
+	// GuestHostIP is the IP address the guest uses to reach the host.
+	// Defaults to "10.0.2.2" (QEMU user-mode networking). Callers using a
+	// different networking topology (e.g. bridged, WSL2 NAT) set this to the
+	// appropriate host address.
+	GuestHostIP string
+	// SFTPPort, when non-zero, adds a first-logon bootstrap step that mounts
+	// the host's sftpshare server as a fixed-disk guest drive: WinFsp is
+	// installed from the shipped MSI, rclone from the shipped zip, and the
+	// mount runs as an on-start SYSTEM scheduled task (RcloneMountTaskName).
+	// Fixed-disk (DRIVE_FIXED) is the point: WSL1 drvfs cannot stat/read
+	// through the WebClient's DRIVE_REMOTE mounts (CELL-532), and some
+	// Windows tools refuse network drives outright.
+	SFTPPort int
+	// SFTPUser and SFTPPassword authenticate against the host share.
+	// Empty fall back to "winkit"/"winkit" (loopback-only listener; the
+	// credentials satisfy SFTP, they are not a security boundary).
+	SFTPUser     string
+	SFTPPassword string
+	// SFTPVolumeName is the WinFsp volume label Explorer shows next to the
+	// drive letter (rclone mount --volname). Defaults to "winkit".
+	SFTPVolumeName string
+	// SFTPDrive is the drive letter (no colon) the share is mounted at.
+	// Empty falls back to "W".
+	SFTPDrive string
+	// RclonePayload is the filename of the rclone windows/arm64 release zip
+	// shipped on the answer volume, with RclonePayloadData its bytes. Ships
+	// byte-exact: zip readers scan back from the end of the file, so FAT
+	// cluster padding would corrupt it.
+	RclonePayload     string
+	RclonePayloadData []byte
+	// WinFspPayload is the filename of the WinFsp MSI shipped on the answer
+	// volume, with WinFspPayloadData its bytes. Ships byte-exact: trailing
+	// padding breaks the MSI's digital signature.
+	WinFspPayload     string
+	WinFspPayloadData []byte
+	// NixWSLPayloadData, when non-empty, ships as nix.wsl on the answer
+	// volume (byte-exact: it is a gzip tarball). The bootstrap's 'import
+	// WSL1 Nix distro' step scans attached drives for the name and imports
+	// it under DistroName. See the wslnix package for how it is built.
+	NixWSLPayloadData []byte
+	// EnableWSL1Feature adds a specialize dism command that enables the
+	// Microsoft-Windows-Subsystem-Linux optional feature (lxcore.sys).
+	// WSL1 distros cannot register without it — wsl --import --version 1
+	// exits -1 (WSL_E_WSL1_NOT_SUPPORTED). Enabled with /norestart during
+	// specialize so the reboot into OOBE completes it before the
+	// first-logon bootstrap imports nix.wsl. The hypervisor-side features
+	// (VirtualMachinePlatform, Hyper-V) stay host-driven over SSH and
+	// WINKIT_WSL2-gated: WSL1 does not need them.
+	EnableWSL1Feature bool
+	// SMBIOSHostname registers a boot-time scheduled task that reads the
+	// SMBIOS serial number (QEMU -smbios type=1,serial=<name>) and renames
+	// the computer if it differs from the current hostname. The rename
+	// takes effect on the next boot. This lets the QEMU launcher set a
+	// per-run hostname without rebuilding the answer volume.
+	SMBIOSHostname bool
+	// KeepDisplayAwake adds a specialize command that zeroes the AC display,
+	// standby and disk idle timeouts, so the console stays visible for the
+	// whole automated install. The equivalent bootstrap step runs only at
+	// first logon (after OOBE) and is skipped entirely if the bootstrap fails
+	// early — which left screendumps black for most of a run. Set for headless
+	// installs whose only window is the QMP screendump.
+	KeepDisplayAwake bool
 	// PwshFiles is the extracted PowerShell 7 directory, keyed by answer-
 	// volume path (e.g. "/pwsh/pwsh.exe"). Stock WinPE has no powershell.exe;
 	// these files provide pwsh.exe which the bootstrap.cmd shim and the
@@ -61,7 +149,7 @@ type Config struct {
 	// choice Setup stops to ask. Defaults to "Windows 11 Pro".
 	ImageName string
 	// InstallWimPath, when set, tells Windows Setup to install from a custom
-	// WIM at this path (e.g. "X:\devcell-install.wim") instead of the stock
+	// WIM at this path (e.g. "X:\winkit-install.wim") instead of the stock
 	// install.wim inside the ISO. The path must be reachable from WinPE — a
 	// drive letter assigned to a USB volume the VM mounts.
 	InstallWimPath string
@@ -84,9 +172,31 @@ type Config struct {
 	// The files ship byte-exact, not PadForFAT-padded: Setup's driver
 	// import validates them against the catalog's hashes.
 	AnswerDrivers map[string][]byte
+	// WallpaperName is the filename of a wallpaper image shipped on the
+	// answer volume (e.g. "wallpaper.jpg"). When set with WallpaperData,
+	// BuildAnswerVolume writes the file and the bootstrap copies it to
+	// C:\Windows\Web\Wallpaper\winkit\ and applies it via registry.
+	WallpaperName string
+	// WallpaperData is the wallpaper image bytes, written to the answer
+	// volume by BuildAnswerVolume.
+	WallpaperData []byte
+	// WallpaperPath is the guest-local path to an existing wallpaper file.
+	// When set (and WallpaperName is empty), the bootstrap sets registry
+	// keys pointing to this path without copying. Use when the file is
+	// already on the guest (e.g. from a WebDAV share).
+	WallpaperPath string
+	// CustomSteps are caller-supplied PowerShell steps appended to the
+	// bootstrap after all built-in steps and before guest diagnostics.
+	// Each runs inside Invoke-Step: exceptions are caught and logged.
+	CustomSteps []CustomStep
+	// DisableServices overrides the default list of services to disable in
+	// specialize. When nil, DefaultQuietServices() is used. When non-nil
+	// (even if empty), exactly those services are disabled. Filter
+	// DefaultQuietServices() to keep specific services enabled.
+	DisableServices []QuietService
 	// AgentCommand, when WinPEAgent is set, is pre-baked into the agent's
 	// command file (winpe.AgentCommandFile) so the agent executes it on its first
-	// poll and writes the combined output to devcell-out.txt — a one-shot
+	// poll and writes the combined output to winkit-out.txt — a one-shot
 	// diagnostic channel into WinPE, which has no network and no QGA.
 	AgentCommand string
 }
@@ -157,14 +267,25 @@ func escapeXMLAmp(s string) string {
 	return strings.ReplaceAll(s, "&", "&amp;")
 }
 
-// VirtIODriver describes a driver to install during Windows setup.
+// VirtIODriver describes a driver to stage during Windows setup.
 //
-// The driver is installed with pnputil in the specialize pass, not injected
-// in windowsPE: a PnpCustomizationsWinPE DriverPaths entry whose path does
-// not resolve ABORTS Setup (0x80070001 - 0x40030, run 20260729T172019), and
-// WinPE drive letters are unpredictable, so no letter-based path is safe
-// there. specialize runs in the full OS, where letters can be probed
-// harmlessly with `if exist`.
+// The driver is staged with pnputil /add-driver (without /install) in
+// specialize RunSynchronous. Staging puts the driver into the driver store
+// without triggering PnP enumeration; Windows' own PnP discovers and installs
+// it automatically on the next boot (the OOBE boot), so the driver is active
+// before first logon. This is critical for netkvm (gosshd needs the NIC) and
+// vioserial (progress logging through OOBE).
+//
+// History: pnputil /add-driver /install in specialize caused a reboot loop
+// ("computer restarted unexpectedly", run 20260831T202847) because /install
+// forces PnP enumeration during Setup's own device-setup phase. Without
+// /install, pnputil only stages into the store and does not interfere.
+// PnpCustomizationsWinPE/DriverPaths was also tried but aborts Setup when the
+// path does not resolve (0x80070001 - 0x40030, run 20260729T172019).
+//
+// The stage command is a short cmd for-loop, NOT a PowerShell one-liner: Setup
+// rejects the whole answer file (0x80220005) when any
+// RunSynchronousCommand/Path exceeds 259 chars (run 20260831T205732).
 type VirtIODriver struct {
 	// INFRelPath is the INF's path relative to the root of whatever volume
 	// carries it (the virtio driver CD), without a drive letter — the letter
@@ -179,8 +300,8 @@ type VirtIODriver struct {
 // Storage needs no injection — NVMe and USB CD are inbox — but the NIC is
 // virtio-net-pci, for which Windows ARM64 has no inbox driver. Without it the
 // installed guest has no network: no SSH, no winget, no WSL distro download.
-// NetKVM is not boot-critical, so installing it post-apply in specialize is
-// safe.
+// Staged in specialize so PnP installs it on the OOBE boot, giving gosshd
+// a NIC before first logon.
 func NetKVMDriverPaths() []VirtIODriver {
 	return []VirtIODriver{{
 		INFRelPath:  `NetKVM\w11\ARM64\netkvm.inf`,
@@ -192,10 +313,10 @@ func NetKVMDriverPaths() []VirtIODriver {
 // ARM64.
 //
 // The vioserial driver makes the virtio-serial port visible to Windows as
-// \\.\Global\devcell.progress.0. Without it the bootstrap's Send-Progress
+// \\.\Global\winkit.progress.0. Without it the bootstrap's Send-Progress
 // writes to nothing: PL011 UART does not register as a COMx port on ARM64,
-// and virtio-serial needs this driver. The WinPE phase loads it transiently
-// via drvload, but that does not survive into the installed OS.
+// and virtio-serial needs this driver. Staged in specialize so PnP installs
+// it on the OOBE boot, giving progress logging through OOBE and first logon.
 func VioserialDriverPaths() []VirtIODriver {
 	return []VirtIODriver{{
 		INFRelPath:  `vioserial\w11\ARM64\vioser.inf`,
@@ -203,19 +324,171 @@ func VioserialDriverPaths() []VirtIODriver {
 	}}
 }
 
+// specializeFixedCommands is how many RunSynchronousCommand entries the
+// specialize template always emits before the optional VirtIODrivers block.
+// 1=BypassNRO, 2=firewall (when EnableRDP). Because the firewall command is
+// conditional, the driver block uses specializeDriverBaseOrder (always 3)
+// regardless of whether the firewall command is present: specialize orders
+// need not be contiguous (unlike windowsPE).
+const specializeDriverBaseOrder = 3
+
+// SpecializeDriverStageOrders returns one order per VirtIODriver for the
+// specialize pnputil /add-driver staging commands. Empty when no drivers.
+func (c Config) SpecializeDriverStageOrders() []int {
+	orders := make([]int, len(c.VirtIODrivers))
+	for i := range c.VirtIODrivers {
+		orders[i] = specializeDriverBaseOrder + i
+	}
+	return orders
+}
+
+// specializePostDriverBase is the first order after all driver-stage commands.
+func (c Config) specializePostDriverBase() int {
+	return specializeDriverBaseOrder + len(c.VirtIODrivers)
+}
+
 // SpecializeBootstrapCopyOrder returns the <Order> for the specialize command
-// that copies the bootstrap script from the answer volume to C:\. It runs
-// after all VirtIODriver installs.
+// that copies the bootstrap script from the answer volume to C:\.
 func (c Config) SpecializeBootstrapCopyOrder() int {
-	base := 3 // 1=BypassNRO, 2=firewall (always reserved)
-	return base + len(c.VirtIODrivers)
+	return c.specializePostDriverBase()
+}
+
+// FirstLogonBootstrapOrder returns the <Order> of the bootstrap launch in
+// FirstLogonCommands. Drivers are now staged in specialize and auto-installed
+// by PnP on the OOBE boot, so the bootstrap is the first (and only) command.
+func (c Config) FirstLogonBootstrapOrder() int {
+	return 1
+}
+
+// DefaultGosshdListenAddr is the provisioning gosshd listen address when a
+// config ships the binary without an explicit address. A non-standard port so
+// it never collides with the Windows OpenSSH the image ships on :22.
+const DefaultGosshdListenAddr = ":2222"
+
+// SpecializeGosshdCopyOrder and SpecializeGosshdTaskOrder are the <Order>s for
+// the specialize commands that copy gosshd to C:\ and register its onstart
+// SYSTEM task. They follow the bootstrap copy; orders need not be contiguous,
+// Windows Setup runs them in ascending order.
+func (c Config) SpecializeGosshdCopyOrder() int { return c.specializePostDriverBase() + 1 }
+func (c Config) SpecializeGosshdTaskOrder() int { return c.specializePostDriverBase() + 2 }
+
+// SpecializeSMBIOSHostnameOrder is the <Order> for the specialize command
+// that registers the boot-time hostname-from-SMBIOS scheduled task.
+func (c Config) SpecializeSMBIOSHostnameOrder() int { return c.specializePostDriverBase() + 3 }
+
+// SpecializeKeepDisplayAwakeOrder is the <Order> for the specialize powercfg
+// that keeps the console visible through the whole install (see KeepDisplayAwake).
+func (c Config) SpecializeKeepDisplayAwakeOrder() int { return c.specializePostDriverBase() + 4 }
+
+// specializeQuietServicesBase is the first <Order> used by the quiet-services
+// block. Each service disable is a separate RunSynchronousCommand to stay under
+// the 259-char Path limit enforced by Windows Setup.
+func (c Config) specializeQuietServicesBase() int { return c.specializePostDriverBase() + 5 }
+
+// CustomStep is a caller-supplied PowerShell step appended to the
+// first-logon bootstrap.
+type CustomStep struct {
+	Name   string // step label passed to Invoke-Step
+	Script string // PowerShell body
+}
+
+// QuietService identifies a Windows service to disable during specialize.
+type QuietService struct {
+	Key  string // registry key under HKLM\SYSTEM\CurrentControlSet\Services
+	Desc string
+}
+
+// defaultQuietServices lists the services disabled in specialize and the
+// <Order> offset from specializeQuietServicesBase for each command.
+var defaultQuietServices = []QuietService{
+	{"WinDefend", "Windows Defender Antivirus Service"},
+	{"WdNisSvc", "Windows Defender Network Inspection Service"},
+	{"WdNisDrv", "Windows Defender Network Inspection Driver"},
+	{"WdFilter", "Windows Defender Minifilter Driver"},
+	{"WdBoot", "Windows Defender Boot Driver"},
+	{"Sense", "Windows Defender Advanced Threat Protection"},
+	{"WSearch", "Windows Search"},
+	{"SysMain", "Superfetch"},
+	{"DiagTrack", "Connected User Experiences and Telemetry"},
+	{"dmwappushservice", "WAP Push Message Routing Service"},
+	{"wuauserv", "Windows Update"},
+	{"UsoSvc", "Update Orchestrator Service"},
+	{"WbioSrvc", "Windows Biometric Service"},
+	{"MapsBroker", "Downloaded Maps Manager"},
+	{"TabletInputService", "Touch Keyboard and Handwriting Panel"},
+	{"WerSvc", "Windows Error Reporting Service"},
+	{"Spooler", "Print Spooler"},
+	{"PhoneSvc", "Phone Service"},
+	{"wisvc", "Windows Insider Service"},
+	{"XblAuthManager", "Xbox Live Auth Manager"},
+	{"XblGameSave", "Xbox Live Game Save"},
+}
+
+// quietPolicyCount is the number of extra registry policy commands after the
+// per-service disables: 2 Defender policy + 1 TamperProtection + 1 EarlyLaunch
+// + 2 Windows Update + 1 telemetry.
+const quietPolicyCount = 7
+
+// SpecializeQuietServicesOrders returns the <Order> values for each service
+// disable command plus the policy registry commands at the end.
+func (c Config) SpecializeQuietServicesOrders() []int {
+	base := c.specializeQuietServicesBase()
+	n := len(c.QuietServices()) + quietPolicyCount
+	orders := make([]int, n)
+	for i := range orders {
+		orders[i] = base + i
+	}
+	return orders
+}
+
+// DefaultQuietServices returns the built-in list of services disabled during
+// specialize. Callers can filter this to keep specific services enabled.
+func DefaultQuietServices() []QuietService {
+	out := make([]QuietService, len(defaultQuietServices))
+	copy(out, defaultQuietServices)
+	return out
+}
+
+// QuietServices returns the service list for the template.
+func (c Config) QuietServices() []QuietService {
+	if c.DisableServices != nil {
+		return c.DisableServices
+	}
+	return defaultQuietServices
+}
+
+// SpecializeQuietServicesEnd is the first order after all quiet-services commands.
+func (c Config) specializeQuietServicesEnd() int {
+	return c.specializeQuietServicesBase() + len(c.QuietServices()) + quietPolicyCount
+}
+
+// SpecializeWSL1FeatureOrder is the <Order> for the dism command that enables
+// the WSL1 optional feature (see EnableWSL1Feature).
+func (c Config) SpecializeWSL1FeatureOrder() int { return c.specializeQuietServicesEnd() }
+
+// GosshdListenAddrOrDefault is the address the specialize task launches gosshd
+// on, falling back to DefaultGosshdListenAddr.
+func (c Config) GosshdListenAddrOrDefault() string {
+	if c.GosshdListenAddr != "" {
+		return c.GosshdListenAddr
+	}
+	return DefaultGosshdListenAddr
+}
+
+// GosshdVsockFlags returns the -vsock-port flag fragment for the schtasks
+// command, or empty when vsock is not configured.
+func (c Config) GosshdVsockFlags() string {
+	if c.GosshdVsockPort == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" -vsock-port %d", c.GosshdVsockPort)
 }
 
 // DefaultSessionUser is used when the host provides no $USER.
-const DefaultSessionUser = "devcell"
+const DefaultSessionUser = "winkit"
 
 // SessionUsername returns the account name to create in the guest: the host's
-// $USER, mirroring devcell's HOST_USER model (Docker's entrypoint and the tart
+// $USER, mirroring winkit's HOST_USER model (Docker's entrypoint and the tart
 // engine derive their session user the same way), so a Windows cell has the
 // same account as every other engine.
 func SessionUsername() string {
@@ -225,13 +498,14 @@ func SessionUsername() string {
 	return DefaultSessionUser
 }
 
-// DefaultConfig returns sensible defaults for a devcell Windows VM.
+// DefaultConfig returns sensible defaults for a winkit Windows VM.
 func DefaultConfig() Config {
 	return Config{
 		Username:  SessionUsername(),
 		Password:  "rdp",
 		Locale:    "en-US",
-		Hostname:  "devcell-win",
+		Hostname:   "winkit",
+		DistroName: "winkit",
 		TimeZone:  "UTC",
 		ImageName: "Windows 11 Pro",
 		// No driver injection: the VM uses NVMe for disk and a USB CD-ROM for
@@ -242,6 +516,7 @@ func DefaultConfig() Config {
 
 var autounattendFuncs = template.FuncMap{
 	"inc":      func(i int) int { return i + 1 },
+	"add":      func(a, b int) int { return a + b },
 	"addOrder": func(i, base int) int { return i + base },
 	// agentLauncher emits winpe.AgentLauncherCommand with XML escaping; the
 	// command is Go-generated so the template and the shipped script cannot
@@ -330,7 +605,7 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
         <RunSynchronousCommand wcm:action="add">
           <Order>{{.AgentLauncherOrder}}</Order>
           <Path>{{agentLauncher}}</Path>
-          <Description>Start the devcell WinPE agent from the answer volume</Description>
+          <Description>Start the winkit WinPE agent from the answer volume</Description>
         </RunSynchronousCommand>
 {{- end}}
 {{- range .WinPEDriverLoads}}
@@ -451,27 +726,126 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
         </RunSynchronousCommand>
 {{- end}}
 {{- range $i, $d := .VirtIODrivers}}
-        <!-- The driver CD's letter is unknowable in advance, so probe for the
-             INF on every plausible letter. Test-Path never throws, and the
-             try/catch + exit 0 means a broken driver degrades to "no network"
-             (visible in the first-logon diagnostics) instead of aborting the
-             install. -->
+        <!-- Stage the driver into the driver store (no /install): PnP
+             auto-installs it on the next boot (OOBE). /install during
+             specialize triggers PnP enumeration during Setup's own device-setup
+             phase, causing a reboot loop (run 20260831T202847). -->
         <RunSynchronousCommand wcm:action="add">
-          <Order>{{addOrder $i 3}}</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -Command "try { foreach ($l in 'C','D','E','F','G','H','I','J','K','L') { if (Test-Path \"${l}:\{{$d.INFRelPath}}\") { &amp; pnputil.exe /add-driver \"${l}:\{{$d.INFRelPath}}\" /install } } } catch {}; exit 0"</Path>
-          <Description>{{$d.Description}}</Description>
+          <Order>{{index $.SpecializeDriverStageOrders $i}}</Order>
+          <Path>cmd /c "for %d in (C D E F G H I J K L) do @if exist %d:\{{$d.INFRelPath}} pnputil /add-driver %d:\{{$d.INFRelPath}}"</Path>
+          <Description>Stage {{$d.Description}} into driver store</Description>
         </RunSynchronousCommand>
 {{- end}}
-        <!-- The answer volume's drive letter is unpredictable after the
-             OOBE reboot — USB automount may not assign one. Copy the
-             bootstrap script to C:\ now, while specialize still has
-             letters assigned, so FirstLogonCommands can launch it from
-             a fixed path. Same cannot-fail pattern as the driver probe. -->
+        <!-- Copy the bootstrap to C:\ now, while specialize has drive letters,
+             so FirstLogonCommands can launch it from a fixed path. This MUST be
+             short: Setup rejects the whole answer file (0x80220005 "value is
+             invalid") if a RunSynchronousCommand/Path exceeds 259 chars, which
+             a PowerShell one-liner does — run 20260831T205732 died exactly here.
+             A cmd for-loop stays well under the cap. -->
         <RunSynchronousCommand wcm:action="add">
           <Order>{{.SpecializeBootstrapCopyOrder}}</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -Command "try { foreach ($l in 'C','D','E','F','G','H','I','J','K','L') { if (Test-Path \"${l}:\devcell-bootstrap.ps1\") { Copy-Item \"${l}:\devcell-bootstrap.ps1\" C:\devcell-bootstrap.ps1 -Force; break } } } catch {}; exit 0"</Path>
+          <Path>cmd /c "for %d in (C D E F G H I J K L) do @if exist %d:\winkit-bootstrap.ps1 copy /y %d:\winkit-bootstrap.ps1 C:\winkit-bootstrap.ps1 >nul"</Path>
           <Description>Copy bootstrap script to C:\ for reliable first-logon discovery</Description>
         </RunSynchronousCommand>
+{{- if .GosshdBinaryName}}
+        <!-- gosshd is the provisioning SSH: copy it to C:\ now (specialize has
+             drive letters and runs as SYSTEM) and register an onstart SYSTEM
+             task, so a reachable channel exists on the first boot regardless of
+             whether the first-logon bootstrap succeeds. Both commands stay well
+             under the 259-char cap. It is torn down before the image ships. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{.SpecializeGosshdCopyOrder}}</Order>
+          <Path>cmd /c "for %d in (C D E F G H I J K L) do @if exist %d:\{{.GosshdBinaryName}} copy /y %d:\{{.GosshdBinaryName}} C:\{{.GosshdBinaryName}} >nul"</Path>
+          <Description>Copy gosshd provisioning server to C:\</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{.SpecializeGosshdTaskOrder}}</Order>
+          <Path>cmd /c schtasks /create /tn gosshd /sc onstart /ru SYSTEM /rl HIGHEST /tr "C:\{{.GosshdBinaryName}} -addr {{.GosshdListenAddrOrDefault}}{{.GosshdVsockFlags}} -shell powershell C:\gosshd.log \\.\Global\winkit.structured.0" /f</Path>
+          <Description>Run gosshd provisioning server at every boot as SYSTEM</Description>
+        </RunSynchronousCommand>
+{{- end}}
+{{- if .SMBIOSHostname}}
+        <!-- Register a boot-time task that reads the SMBIOS serial number
+             (set by QEMU -smbios type=1,serial=<hostname>) and renames the
+             computer if it differs. Rename-Computer without -Restart just
+             updates the registry; the name takes effect on next boot. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{.SpecializeSMBIOSHostnameOrder}}</Order>
+          <Path>cmd /c schtasks /create /tn winkit-hostname /sc onstart /ru SYSTEM /rl HIGHEST /tr "powershell -NoP -C $s=(gwmi Win32_BIOS).SerialNumber;if($s-and$env:COMPUTERNAME-cne$s){Rename-Computer $s -Force}" /f</Path>
+          <Description>Sync hostname from SMBIOS serial at every boot</Description>
+        </RunSynchronousCommand>
+{{- end}}
+{{- if .KeepDisplayAwake}}
+        <!-- Keep the console visible for the whole install. The bootstrap step
+             that does this runs only at first logon (post-OOBE) and not at all
+             if the bootstrap fails early, which left screendumps black for most
+             of a run. AC timeouts only; the VM is always "plugged in". -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{.SpecializeKeepDisplayAwakeOrder}}</Order>
+          <Path>cmd /c "powercfg /change monitor-timeout-ac 0 &amp; powercfg /change standby-timeout-ac 0 &amp; powercfg /change disk-timeout-ac 0"</Path>
+          <Description>Keep the display, disks and machine awake during install</Description>
+        </RunSynchronousCommand>
+{{- end}}
+        <!-- Disable non-essential services before OOBE starts so they never
+             consume CPU/IO during the install. Each reg add sets the service
+             Start type to 4 (Disabled). Split into individual commands to stay
+             under the 259-char Path limit. -->
+{{- range $i, $svc := .QuietServices}}
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{index $.SpecializeQuietServicesOrders $i}}</Order>
+          <Path>reg add HKLM\SYSTEM\CurrentControlSet\Services\{{$svc.Key}} /v Start /t REG_DWORD /d 4 /f</Path>
+          <Description>Disable {{$svc.Desc}}</Description>
+        </RunSynchronousCommand>
+{{- end}}
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{index .SpecializeQuietServicesOrders (len .QuietServices)}}</Order>
+          <Path>reg add HKLM\SOFTWARE\Policies\Microsoft\Windows Defender /v DisableAntiSpyware /t REG_DWORD /d 1 /f</Path>
+          <Description>Defender policy: disable antispyware</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{index .SpecializeQuietServicesOrders (add (len .QuietServices) 1)}}</Order>
+          <Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableRealtimeMonitoring /t REG_DWORD /d 1 /f</Path>
+          <Description>Defender policy: disable realtime monitoring</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{index .SpecializeQuietServicesOrders (add (len .QuietServices) 2)}}</Order>
+          <Path>reg add "HKLM\SOFTWARE\Microsoft\Windows Defender\Features" /v TamperProtection /t REG_DWORD /d 0 /f</Path>
+          <Description>Defender: disable Tamper Protection</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{index .SpecializeQuietServicesOrders (add (len .QuietServices) 3)}}</Order>
+          <Path>reg add HKLM\SYSTEM\CurrentControlSet\Control\EarlyLaunch /v DriverLoadPolicy /t REG_DWORD /d 7 /f</Path>
+          <Description>Disable Early Launch Anti-Malware driver loading</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{index .SpecializeQuietServicesOrders (add (len .QuietServices) 4)}}</Order>
+          <Path>reg add HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU /v NoAutoUpdate /t REG_DWORD /d 1 /f</Path>
+          <Description>Windows Update policy: disable automatic updates</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{index .SpecializeQuietServicesOrders (add (len .QuietServices) 5)}}</Order>
+          <Path>reg add HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU /v AUOptions /t REG_DWORD /d 1 /f</Path>
+          <Description>Windows Update policy: never check for updates</Description>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{index .SpecializeQuietServicesOrders (add (len .QuietServices) 6)}}</Order>
+          <Path>reg add HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection /v AllowTelemetry /t REG_DWORD /d 0 /f</Path>
+          <Description>Telemetry policy: disable diagnostic data collection</Description>
+        </RunSynchronousCommand>
+{{- if .EnableWSL1Feature}}
+
+        <!-- WSL1 needs the Microsoft-Windows-Subsystem-Linux optional feature
+             (lxcore.sys); without it the version-1 wsl import exits -1. /norestart
+             defers the driver load to the reboot into OOBE, so the feature is
+             live before the first-logon bootstrap imports nix.wsl. Wrapped in
+             exit /b 0: dism returns 3010 (restart required), which would
+             otherwise abort Setup. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{.SpecializeWSL1FeatureOrder}}</Order>
+          <Path>cmd /c "dism /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart &amp; exit /b 0"</Path>
+          <Description>Enable the WSL1 optional feature</Description>
+        </RunSynchronousCommand>
+{{- end}}
       </RunSynchronous>
       <ExtendOSPartition>
         <Extend>true</Extend>
@@ -567,14 +941,14 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
       </AutoLogon>
 
       <FirstLogonCommands>
-        <!-- The specialize pass copies the bootstrap to C:\ because the
-             USB answer volume may lose its drive letter after the OOBE
-             reboot. Try the fixed path first; fall back to a volume
-             scan in case specialize's copy didn't find the source. -->
+        <!-- Drivers are staged in specialize (into the driver store, not forced)
+             and auto-installed by PnP on the OOBE boot. No driver commands here.
+             specialize copied the bootstrap to C:\, so launch it from the fixed
+             path — kept short, same 259-char reason as above. -->
         <SynchronousCommand wcm:action="add">
-          <Order>1</Order>
-          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path C:\devcell-bootstrap.ps1) { &amp; C:\devcell-bootstrap.ps1 } else { Get-Volume | Where-Object DriveLetter | ForEach-Object { $s = ($_.DriveLetter + ':\devcell-bootstrap.ps1'); if (Test-Path $s) { &amp; $s } } }"</CommandLine>
-          <Description>Run the devcell bootstrap from the answer volume</Description>
+          <Order>{{.FirstLogonBootstrapOrder}}</Order>
+          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -File C:\winkit-bootstrap.ps1</CommandLine>
+          <Description>Run the winkit bootstrap copied to C:\ by specialize</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
 
@@ -593,12 +967,13 @@ func WriteImage(xmlBytes []byte, destPath string) error {
 }
 
 // writeAnswerImage validates the answer file and writes it, the shared base
-// files, and any extra files to a FAT image. Every payload in extra is
-// padded — see PadForFAT — and CreateFATImage verifies each round-trip.
-// Files in exact are written byte-identical: driver payloads must match
-// their catalog hashes, so they cannot carry padding (CreateFATImage's
-// verification still catches the go-diskfs boundary bug loudly if one of
-// them ever lands on it).
+// files, and any extra files to a FAT image. Every payload in extra is padded
+// to the volume's cluster boundary by CreateFATImagePadded — a fixed 2048 no
+// longer aligns once the payload (pwsh + OpenSSH) pushes the volume past 260MB
+// and go-diskfs switches to 4KB clusters. Files in exact are written
+// byte-identical: driver payloads must match their catalog hashes, so they
+// cannot carry padding (the round-trip verification still catches the go-diskfs
+// boundary bug loudly if one of them ever lands on it).
 func writeAnswerImage(xmlBytes []byte, extra, exact map[string][]byte, destPath string) error {
 	// A misplaced setting is ignored silently by Windows Setup, so a bad
 	// answer file only shows up hours later as an unexplained install
@@ -610,18 +985,15 @@ func writeAnswerImage(xmlBytes []byte, extra, exact map[string][]byte, destPath 
 		}
 		return fmt.Errorf("invalid answer file:\n  %s", strings.Join(msgs, "\n  "))
 	}
-	files := map[string][]byte{
-		"/autounattend.xml":              winpe.PadForFAT(xmlBytes),
-		"/startup.nsh":                   winpe.PadForFAT([]byte(winpe.StartupNSH)),
-		"/" + GuestDiagnosticsScriptName: winpe.PadForFAT(GenerateGuestDiagnosticsScript()),
+	padded := map[string][]byte{
+		"/autounattend.xml":              xmlBytes,
+		"/startup.nsh":                   []byte(winpe.StartupNSH),
+		"/" + GuestDiagnosticsScriptName: GenerateGuestDiagnosticsScript(),
 	}
 	for name, data := range extra {
-		files[name] = winpe.PadForFAT(data)
+		padded[name] = data
 	}
-	for name, data := range exact {
-		files[name] = data
-	}
-	return isokit.CreateFATImage(destPath, files)
+	return isokit.CreateFATImagePadded(destPath, padded, exact)
 }
 
 // BuildAnswerVolume renders the answer file and the first-logon bootstrap
@@ -638,9 +1010,19 @@ func BuildAnswerVolume(cfg Config, destPath string) error {
 		// the standalone release travels with the answer file.
 		extra["/"+cfg.OpenSSHPayload] = cfg.OpenSSHPayloadData
 	}
+	if cfg.WallpaperName != "" && len(cfg.WallpaperData) > 0 {
+		extra["/"+cfg.WallpaperName] = cfg.WallpaperData
+	}
 	if cfg.WinPEAgent {
-		extra["/"+winpe.AgentScriptName] = winpe.GenerateAgent(winpe.PayloadConfig{})
-		extra["/"+winpe.AgentVolumeMarker] = []byte("devcell agent volume\r\n")
+		// Both virtio-serial ports wired: progress for the human-readable
+		// stream, structured for the Panther-log JSON tee into build.jsonl.
+		// Harmless when the ports are absent (no vioserial driver): the
+		// agent opens them lazily and keeps working without them.
+		extra["/"+winpe.AgentScriptName] = winpe.GenerateAgent(winpe.PayloadConfig{
+			ProgressPort:   `\\.\Global\` + winpe.ProgressPortName,
+			StructuredPort: `\\.\Global\` + winpe.StructuredPortName,
+		})
+		extra["/"+winpe.AgentVolumeMarker] = []byte("winkit agent volume\r\n")
 		extra["/"+winpe.DiagScriptName] = winpe.GenerateDiagScript()
 		extra["/"+winpe.HyperVDiagScriptName] = winpe.GenerateHyperVDiagScript("")
 		if cfg.AgentCommand != "" {
@@ -655,7 +1037,29 @@ func BuildAnswerVolume(cfg Config, destPath string) error {
 	for path, data := range cfg.PwshFiles {
 		extra[path] = data
 	}
-	return writeAnswerImage(GenerateXML(cfg), extra, cfg.AnswerDrivers, destPath)
+	// Answer-volume drivers are only consumed by WinPE's drvload, which
+	// does not verify Authenticode. Cluster-padding is safe here; the
+	// installed-OS copy comes from the virtio-win CD via pnputil.
+	for path, data := range cfg.AnswerDrivers {
+		extra[path] = data
+	}
+	// Byte-exact (unpadded) files: gosshd launches byte-for-byte as built,
+	// the rclone zip is read from its end, and the WinFsp MSI is signature-
+	// checked — FAT cluster padding corrupts all three.
+	exact := map[string][]byte{}
+	if cfg.GosshdBinaryName != "" && len(cfg.GosshdBinaryData) > 0 {
+		exact["/"+cfg.GosshdBinaryName] = cfg.GosshdBinaryData
+	}
+	if cfg.RclonePayload != "" && len(cfg.RclonePayloadData) > 0 {
+		exact["/"+cfg.RclonePayload] = cfg.RclonePayloadData
+	}
+	if cfg.WinFspPayload != "" && len(cfg.WinFspPayloadData) > 0 {
+		exact["/"+cfg.WinFspPayload] = cfg.WinFspPayloadData
+	}
+	if len(cfg.NixWSLPayloadData) > 0 {
+		exact["/nix.wsl"] = cfg.NixWSLPayloadData
+	}
+	return writeAnswerImage(GenerateXML(cfg), extra, exact, destPath)
 }
 
 // WriteISO creates a small ISO image containing autounattend.xml.

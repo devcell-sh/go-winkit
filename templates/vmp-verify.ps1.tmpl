@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Continue'
 
 Write-Output '{{.Banner}}'
 Write-Output (Get-Date -Format o)
-devcell-json @{ event = 'verify_start' }
+winkit-json @{ event = 'verify_start' }
 
 {{template "vmp-registration" .}}
 
@@ -29,7 +29,7 @@ try {
     } catch { $source = "FAILED: $($_.Exception.Message)" }
 }
 Write-Output "SC_SOURCE=$source known=$($state.Count)"
-devcell-json @{ event = 'scm_source'; source = $source; known = $state.Count }
+winkit-json @{ event = 'scm_source'; source = $source; known = $state.Count }
 
 foreach ($s in $svcs) {
     # A name the SCM has never heard of is exactly what a bad transplant
@@ -49,7 +49,7 @@ foreach ($s in $svcs) {
         $startVal = "$($p.Start)"
     }
     Write-Output "$($s)_START=$startVal"
-    devcell-json @{ event = 'probe_service'; service = $s; sc = $scState; start = $startVal }
+    winkit-json @{ event = 'probe_service'; service = $s; sc = $scState; start = $startVal }
 }
 
 # --- demand-start probe ---------------------------------------------------
@@ -68,13 +68,13 @@ foreach ($s in $svcs) {
         $ctl = New-Object System.ServiceProcess.ServiceController $s
         if ("$($ctl.Status)" -eq 'Running') {
             Write-Output "$($s)_TRYSTART=ALREADY_RUNNING"
-            devcell-json @{ event = 'try_start'; service = $s; status = 'already_running' }
+            winkit-json @{ event = 'try_start'; service = $s; status = 'already_running' }
             continue
         }
         $ctl.Start()
         $ctl.WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
         Write-Output "$($s)_TRYSTART=OK"
-        devcell-json @{ event = 'try_start'; service = $s; status = 'ok' }
+        winkit-json @{ event = 'try_start'; service = $s; status = 'ok' }
     } catch {
         $code = 'unknown'
         $e = $_.Exception
@@ -83,7 +83,7 @@ foreach ($s in $svcs) {
             $e = $e.InnerException
         }
         Write-Output "$($s)_TRYSTART=FAIL win32=$code msg=$($_.Exception.Message)"
-        devcell-json @{ event = 'try_start'; service = $s; status = 'fail'; win32 = "$code"; error = "$($_.Exception.Message)" }
+        winkit-json @{ event = 'try_start'; service = $s; status = 'fail'; win32 = "$code"; error = "$($_.Exception.Message)" }
     }
 }
 
@@ -93,10 +93,10 @@ Write-Output '--- starting hvservice on demand ---'
 try {
     Start-Service -Name hvservice -ErrorAction Stop
     Write-Output 'HVSERVICE_START_EXIT=0'
-    devcell-json @{ event = 'demand_start'; service = 'hvservice'; status = 'ok' }
+    winkit-json @{ event = 'demand_start'; service = 'hvservice'; status = 'ok' }
 } catch {
     Write-Output "HVSERVICE_START_EXIT=$($_.Exception.Message)"
-    devcell-json @{ event = 'demand_start'; service = 'hvservice'; status = 'fail'; error = "$($_.Exception.Message)" }
+    winkit-json @{ event = 'demand_start'; service = 'hvservice'; status = 'fail'; error = "$($_.Exception.Message)" }
 }
 
 # WinPE-WMI is enabled in stock boot.wim, so this is available.
@@ -106,7 +106,7 @@ try {
     $hv = $cs.HypervisorPresent
 } catch { $hv = 'UNKNOWN' }
 Write-Output "HYPERVISOR_PRESENT=$hv"
-devcell-json @{ event = 'hypervisor'; present = "$hv" }
+winkit-json @{ event = 'hypervisor'; present = "$hv" }
 
 # --- vmcompute / HCS probe --------------------------------------------------
 Write-Output '--- vmcompute probe ---'
@@ -117,10 +117,10 @@ try {
         $ctl.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
     }
     Write-Output "VMCOMPUTE_STATUS=RUNNING"
-    devcell-json @{ event = 'vmcompute'; status = 'running' }
+    winkit-json @{ event = 'vmcompute'; status = 'running' }
 } catch {
     Write-Output "VMCOMPUTE_STATUS=FAIL msg=$($_.Exception.Message)"
-    devcell-json @{ event = 'vmcompute'; status = 'fail'; error = "$($_.Exception.Message)" }
+    winkit-json @{ event = 'vmcompute'; status = 'fail'; error = "$($_.Exception.Message)" }
 }
 
 # hcsdiag probes the Host Compute Service directly.
@@ -130,14 +130,14 @@ if (Test-Path $hcsdiag) {
     try {
         $hcsList = & $hcsdiag list 2>&1
         Write-Output "HCSDIAG_LIST=$hcsList"
-        devcell-json @{ event = 'hcsdiag_list'; output = "$hcsList" }
+        winkit-json @{ event = 'hcsdiag_list'; output = "$hcsList" }
     } catch {
         Write-Output "HCSDIAG_LIST=FAIL msg=$($_.Exception.Message)"
-        devcell-json @{ event = 'hcsdiag_list'; status = 'fail'; error = "$($_.Exception.Message)" }
+        winkit-json @{ event = 'hcsdiag_list'; status = 'fail'; error = "$($_.Exception.Message)" }
     }
 } else {
     Write-Output "HCSDIAG_LIST=NOT_FOUND"
-    devcell-json @{ event = 'hcsdiag_list'; status = 'not_found' }
+    winkit-json @{ event = 'hcsdiag_list'; status = 'not_found' }
 }
 
 # --- WSL probe ---------------------------------------------------------------
@@ -147,14 +147,14 @@ if (Test-Path $wslExe) {
     try {
         $wslStatus = & $wslExe --status 2>&1
         Write-Output "WSL_STATUS=$wslStatus"
-        devcell-json @{ event = 'wsl_status'; output = "$wslStatus" }
+        winkit-json @{ event = 'wsl_status'; output = "$wslStatus" }
     } catch {
         Write-Output "WSL_STATUS=FAIL msg=$($_.Exception.Message)"
-        devcell-json @{ event = 'wsl_status'; status = 'fail'; error = "$($_.Exception.Message)" }
+        winkit-json @{ event = 'wsl_status'; status = 'fail'; error = "$($_.Exception.Message)" }
     }
 } else {
     Write-Output "WSL_EXE=NOT_FOUND"
-    devcell-json @{ event = 'wsl_exe'; status = 'not_found' }
+    winkit-json @{ event = 'wsl_exe'; status = 'not_found' }
 }
 
 # --- wslservice probe -------------------------------------------------------
@@ -171,14 +171,14 @@ if (Test-Path $wslSvc) {
         Start-Sleep -Seconds 3
         $ctl = New-Object System.ServiceProcess.ServiceController 'wslservice'
         Write-Output "WSLSERVICE_STATUS=$($ctl.Status)"
-        devcell-json @{ event = 'wslservice'; status = "$($ctl.Status)" }
+        winkit-json @{ event = 'wslservice'; status = "$($ctl.Status)" }
     } catch {
         Write-Output "WSLSERVICE_STATUS=FAIL msg=$($_.Exception.Message)"
-        devcell-json @{ event = 'wslservice'; status = 'fail'; error = "$($_.Exception.Message)" }
+        winkit-json @{ event = 'wslservice'; status = 'fail'; error = "$($_.Exception.Message)" }
     }
 } else {
     Write-Output "WSLSERVICE_EXE=NOT_FOUND"
-    devcell-json @{ event = 'wslservice'; status = 'not_found' }
+    winkit-json @{ event = 'wslservice'; status = 'not_found' }
 }
 
 # --- HCS VM creation probe --------------------------------------------------
@@ -193,14 +193,14 @@ try {
     $hns = [System.Runtime.InteropServices.Marshal]::LoadLibrary("$env:SystemRoot\System32\vmcompute.dll")
     if ($hns -ne [IntPtr]::Zero) {
         Write-Output "VMCOMPUTE_DLL=LOADED"
-        devcell-json @{ event = 'vmcompute_dll'; status = 'loaded' }
+        winkit-json @{ event = 'vmcompute_dll'; status = 'loaded' }
     } else {
         Write-Output "VMCOMPUTE_DLL=FAILED"
-        devcell-json @{ event = 'vmcompute_dll'; status = 'failed' }
+        winkit-json @{ event = 'vmcompute_dll'; status = 'failed' }
     }
 } catch {
     Write-Output "VMCOMPUTE_DLL=FAIL msg=$($_.Exception.Message)"
-    devcell-json @{ event = 'vmcompute_dll'; status = 'fail'; error = "$($_.Exception.Message)" }
+    winkit-json @{ event = 'vmcompute_dll'; status = 'fail'; error = "$($_.Exception.Message)" }
 }
 
 # Check if the VID device (Virtual Infrastructure Driver) is accessible.
@@ -211,12 +211,12 @@ try {
     $vidHandle = [System.IO.File]::Open($vidPath, 'Open', 'Read', 'ReadWrite')
     Write-Output "VID_DEVICE=OPEN"
     $vidHandle.Close()
-    devcell-json @{ event = 'vid_device'; status = 'open' }
+    winkit-json @{ event = 'vid_device'; status = 'open' }
 } catch {
     Write-Output "VID_DEVICE=FAIL msg=$($_.Exception.Message)"
-    devcell-json @{ event = 'vid_device'; status = 'fail'; error = "$($_.Exception.Message)" }
+    winkit-json @{ event = 'vid_device'; status = 'fail'; error = "$($_.Exception.Message)" }
 }
 
 Write-Output '{{.Complete}}'
-devcell-json @{ event = 'verify_complete' }
+winkit-json @{ event = 'verify_complete' }
 if ($structStream) { $structStream.Flush(); $structStream.Close() }

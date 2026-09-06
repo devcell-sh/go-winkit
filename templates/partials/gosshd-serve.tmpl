@@ -1,5 +1,5 @@
 {{define "gosshd-serve"}}# --- SSH server -----------------------------------------------------------
-# Brings up devcell's own SSH server (gosshd) inside a WinPE guest. WinPE boots with
+# Brings up winkit's own SSH server (gosshd) inside a WinPE guest. WinPE boots with
 # the network stack down and has no service-control CLI, so this initialises
 # networking and runs the server as a detached process rather than a service.
 #
@@ -41,9 +41,9 @@ try {
     if ($m) { $ip = $m }
 } catch { }
 Write-Output "GUEST_IP=$ip"
-devcell-json @{ event = 'guest_ip'; ip = "$ip" }
+winkit-json @{ event = 'guest_ip'; ip = "$ip" }
 
-$sshExe = Join-Path $DevcellVol '{{.SSHExe}}'
+$sshExe = Join-Path $WinkitVol '{{.SSHExe}}'
 if (Test-Path $sshExe) {
     try {
         # A listening socket is not reachability: the firewall silently drops
@@ -54,7 +54,7 @@ if (Test-Path $sshExe) {
         # throwaway PE behind a host-only NAT, so dropping it outright is fine.
         & wpeutil DisableFirewall 2>&1 | Out-Null
         Write-Output "FIREWALL_SSH=$LASTEXITCODE"
-        devcell-json @{ event = 'firewall'; exit = $LASTEXITCODE }
+        winkit-json @{ event = 'firewall'; exit = $LASTEXITCODE }
 
         # Two sinks, because they answer different questions. The redirected
         # stderr is read a few seconds from now and only ever shows why the
@@ -64,7 +64,7 @@ if (Test-Path $sshExe) {
         # after the VM is gone. Without it a refused session reports only
         # "Connection closed".
         $sshdOut = Join-Path $env:TEMP 'gosshd.out'
-        $sshdLog = Join-Path $DevcellVol '{{.ServerLog}}'
+        $sshdLog = Join-Path $WinkitVol '{{.ServerLog}}'
         Start-Process -FilePath $sshExe -ArgumentList "$sshdLog" `
             -RedirectStandardError $sshdOut -PassThru -NoNewWindow | Out-Null
         Write-Output "GOSSHD_LOG=$sshdLog"
@@ -75,7 +75,7 @@ if (Test-Path $sshExe) {
         # failed" when it is in fact running.
         $proc = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($sshExe)) -ErrorAction SilentlyContinue
         Write-Output "GOSSHD_PROC=$(if ($proc) { $proc.Id } else { 'NONE' })"
-        devcell-json @{ event = 'gosshd'; pid = "$(if ($proc) { $proc.Id } else { 'NONE' })" }
+        winkit-json @{ event = 'gosshd'; pid = "$(if ($proc) { $proc.Id } else { 'NONE' })" }
 
         # The server's own stderr is the only thing that names why it refused
         # to start, so always replay it.
@@ -87,7 +87,7 @@ if (Test-Path $sshExe) {
     } catch {
         Write-Output "GOSSHD_PROC=NONE"
         Write-Output "GOSSHD_ERROR=$($_.Exception.Message)"
-        devcell-json @{ event = 'gosshd'; status = 'fail'; error = "$($_.Exception.Message)" }
+        winkit-json @{ event = 'gosshd'; status = 'fail'; error = "$($_.Exception.Message)" }
     }
 } else {
     Write-Output 'GOSSHD_PROC=NO_PAYLOAD'

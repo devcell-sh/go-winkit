@@ -4,24 +4,21 @@ import (
 	"os"
 	"testing"
 
+	"github.com/devcell-sh/go-winkit/cache"
 	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// windowsISOPath returns the cached Windows installer, skipping when the
+// cache has not been seeded. Seed it with `task test:seed`.
 func windowsISOPath(t *testing.T) string {
 	t.Helper()
-	candidates := []string{
-		os.ExpandEnv("$HOME/.devcell/cache/qemu/windows-arm64-en-us.iso"),
-		"/home/dmitry/.devcell/cache/qemu/windows-arm64-en-us.iso",
+	p := cache.WindowsISO()
+	if _, err := os.Stat(p); err != nil {
+		t.Skipf("Windows ISO not available at %s (run: task test:seed)", p)
 	}
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	t.Skip("Windows ISO not available")
-	return ""
+	return p
 }
 
 func TestISOPreflight_RealWindowsISO(t *testing.T) {
@@ -34,19 +31,9 @@ func TestISOPreflight_RealWindowsISO(t *testing.T) {
 }
 
 func TestLoadWinPEStorageDrivers_RealVirtioISO(t *testing.T) {
-	candidates := []string{
-		os.ExpandEnv("$HOME/.devcell/cache/qemu/virtio-win.iso"),
-		"/home/dmitry/.devcell/cache/qemu/virtio-win.iso",
-	}
-	isoPath := ""
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			isoPath = p
-			break
-		}
-	}
-	if isoPath == "" {
-		t.Skip("virtio-win ISO not available")
+	isoPath := cache.VirtIOISO()
+	if _, err := os.Stat(isoPath); err != nil {
+		t.Skipf("virtio-win ISO not available at %s (run: task test:seed)", isoPath)
 	}
 
 	drivers, err := LoadWinPEStorageDrivers(isoPath)

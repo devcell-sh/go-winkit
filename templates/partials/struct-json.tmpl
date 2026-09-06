@@ -10,7 +10,7 @@ try {
         [System.IO.FileShare]::ReadWrite)
 } catch { }
 
-function devcell-json([hashtable]$obj) {
+function winkit-json([hashtable]$obj) {
     if (-not $structStream) { return }
     $obj['ts'] = (Get-Date -Format o)
     $line = ($obj | ConvertTo-Json -Compress -Depth 5) + "`n"

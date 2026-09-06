@@ -35,7 +35,7 @@ type WimPrepOp struct {
 
 // WimPrepConfig parameterises the WIM builder pipeline. A builder WinPE boots,
 // mounts boot.wim and install.wim, applies the listed operations via DISM
-// offline servicing, and writes the result as devcell.wim.
+// offline servicing, and writes the result as winkit.wim.
 type WimPrepConfig struct {
 	// Ops is the ordered list of servicing operations.
 	Ops []WimPrepOp
@@ -50,7 +50,7 @@ type WimPrepConfig struct {
 
 	// TargetWim is the filename of the output WIM on the shared volume.
 	// When equal to SourceWim the copy step is skipped (DISM commits
-	// in place). Default: "devcell.wim".
+	// in place). Default: "winkit.wim".
 	TargetWim string
 
 	// UnmountInstallWim controls whether the builder explicitly unmounts
@@ -70,17 +70,17 @@ type WimPrepConfig struct {
 }
 
 const (
-	WimBuilderScriptName    = `devcell-wim-builder.ps1`
-	WimBuilderDoneFile      = `devcell-builder-done.txt`
-	WimBuilderLogFile       = `devcell-builder.log`
-	WimBuilderCompleteToken = `DEVCELL_BUILDER_DONE`
+	WimBuilderScriptName    = `winkit-wim-builder.ps1`
+	WimBuilderDoneFile      = `winkit-builder-done.txt`
+	WimBuilderLogFile       = `winkit-builder.log`
+	WimBuilderCompleteToken = `WINKIT_BUILDER_DONE`
 )
 
 // WimBuilderScriptCommand returns the agent command line for the builder.
-// The agent runs this via Invoke-Expression in PowerShell, so $DevcellVol
+// The agent runs this via Invoke-Expression in PowerShell, so $WinkitVol
 // is expanded from the agent's scope.
 func WimBuilderScriptCommand() string {
-	return `& "$DevcellVol\` + WimBuilderScriptName + `" $DevcellVol`
+	return `& "$WinkitVol\` + WimBuilderScriptName + `" $WinkitVol`
 }
 
 type wimBuilderOp struct {
@@ -107,7 +107,7 @@ type wimBuilderData struct {
 
 // GenerateWimBuilderScript produces a PowerShell script that runs inside
 // WinPE to service a boot.wim copy using DISM offline commands. The shared
-// volume (passed as first argument) carries boot.wim in and devcell.wim out.
+// volume (passed as first argument) carries boot.wim in and winkit.wim out.
 func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	idx := cfg.WimImageIndex
 	if idx == 0 {
@@ -119,7 +119,7 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	}
 	targetWim := cfg.TargetWim
 	if targetWim == "" {
-		targetWim = "devcell.wim"
+		targetWim = "winkit.wim"
 	}
 
 	needsVirtIO := false

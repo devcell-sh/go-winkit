@@ -215,6 +215,46 @@ func LoadWinPEViofsDrivers(virtioISO string) (map[string][]byte, error) {
 	return nil, fmt.Errorf("no ARM64 viofs driver in %s:\n  %s", virtioISO, strings.Join(probeErrs, "\n  "))
 }
 
+var netkvmISODirs = []string{
+	"NetKVM/w11/ARM64",
+	"NetKVM/2k25/ARM64",
+	"NetKVM/2k22/ARM64",
+}
+
+const winPENetKVMDir = "/drivers/netkvm/"
+
+// LoadWinPENetKVMDrivers extracts the ARM64 NetKVM network driver from the
+// virtio-win ISO, keyed by answer-volume path. Without it a WinPE guest on
+// virtio-net has no link — nothing that serves or dials TCP can work.
+func LoadWinPENetKVMDrivers(virtioISO string) (map[string][]byte, error) {
+	var probeErrs []string
+	for _, dir := range netkvmISODirs {
+		inf, err := isokit.ReadFileFromISO(virtioISO, "/"+dir+"/netkvm.inf")
+		if err != nil {
+			probeErrs = append(probeErrs, fmt.Sprintf("%s: %v", dir, err))
+			continue
+		}
+		drivers := map[string][]byte{winPENetKVMDir + "netkvm.inf": inf}
+		for _, name := range []string{"netkvm.sys", "netkvm.cat"} {
+			data, err := isokit.ReadFileFromISO(virtioISO, "/"+dir+"/"+name)
+			if err != nil {
+				return nil, fmt.Errorf("reading %s/%s: %w", dir, name, err)
+			}
+			drivers[winPENetKVMDir+name] = data
+		}
+		// The INF's CopyFiles also names the notify object and protocol
+		// helper — drvload fails with 0x80070002 (file not found) without
+		// them. Best-effort: not every virtio-win release ships both.
+		for _, name := range []string{"netkvmco.exe", "netkvmp.exe"} {
+			if data, err := isokit.ReadFileFromISO(virtioISO, "/"+dir+"/"+name); err == nil {
+				drivers[winPENetKVMDir+name] = data
+			}
+		}
+		return drivers, nil
+	}
+	return nil, fmt.Errorf("no ARM64 NetKVM driver in %s:\n  %s", virtioISO, strings.Join(probeErrs, "\n  "))
+}
+
 // BootloaderInfo describes the EFI bootloader extracted from a Windows ISO.
 type BootloaderInfo struct {
 	Arch string // "aarch64", "x86_64", or "unknown"

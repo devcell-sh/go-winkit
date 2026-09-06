@@ -35,17 +35,17 @@ func TestGenerateBootstrap_NoDriversByDefault(t *testing.T) {
 
 func TestGenerateBootstrap_LoadsRequestedDrivers(t *testing.T) {
 	out := string(GenerateBootstrap(PayloadConfig{
-		DriverINFs: []string{`X:\devcell\drivers\viostor.inf`, `X:\devcell\drivers\netkvm.inf`},
+		DriverINFs: []string{`X:\winkit\drivers\viostor.inf`, `X:\winkit\drivers\netkvm.inf`},
 	}))
-	assert.Contains(t, out, `drvload.exe 'X:\devcell\drivers\viostor.inf'`)
-	assert.Contains(t, out, `drvload.exe 'X:\devcell\drivers\netkvm.inf'`)
+	assert.Contains(t, out, `drvload.exe 'X:\winkit\drivers\viostor.inf'`)
+	assert.Contains(t, out, `drvload.exe 'X:\winkit\drivers\netkvm.inf'`)
 }
 
 func TestGenerateBootstrap_ReportsProgressToSerial(t *testing.T) {
 	port := `\\.\Global\` + ProgressPortName
 	out := string(GenerateBootstrap(PayloadConfig{ProgressPort: port}))
 	assert.Contains(t, out, port, "must reference the progress port")
-	assert.Contains(t, out, "devcell:", "must emit devcell progress markers")
+	assert.Contains(t, out, "winkit:", "must emit winkit progress markers")
 	assert.Contains(t, out, "Out-File", "must use Out-File for progress output")
 }
 
@@ -74,18 +74,38 @@ func TestGenerateAgent_PollsCommandFileAndWritesResult(t *testing.T) {
 	assert.Contains(t, out, "Remove-Item", "must consume the command so it runs once")
 }
 
+// The Panther tee is the windowsPE phase's only feed into build.jsonl
+// (gosshd starts in specialize): the agent must tail all four Setup log
+// locations to the structured port as JSON, open the port lazily (the
+// vioserial driver drvloads after the agent starts), and emit none of it
+// when no structured port is configured.
+func TestGenerateAgent_TeesPantherLogsToStructuredPort(t *testing.T) {
+	port := `\\.\Global\` + StructuredPortName
+	out := string(GenerateAgent(PayloadConfig{StructuredPort: port}))
+	assert.Contains(t, out, port)
+	assert.Contains(t, out, `winkit-tee-log 'X:\Windows\Panther\setupact.log' 'setupact'`)
+	assert.Contains(t, out, `winkit-tee-log 'X:\Windows\Panther\setuperr.log' 'setuperr'`)
+	assert.Contains(t, out, `winkit-tee-log 'X:\$windows.~bt\Sources\Panther\setupact.log' 'setupact'`)
+	assert.Contains(t, out, `winkit-tee-log 'X:\$windows.~bt\Sources\Panther\setuperr.log' 'setuperr'`)
+	assert.Contains(t, out, "ConvertTo-Json -Compress", "lines must ship as JSON for build.jsonl")
+	assert.Contains(t, out, "winkit-struct-open", "the port must open lazily — vioserial loads after the agent starts")
+
+	plain := string(GenerateAgent(PayloadConfig{}))
+	assert.NotContains(t, plain, "winkit-tee-log", "no tee without a structured port")
+}
+
 // A command that dies with a terminating error used to land only in the
 // result file, which the host cannot read until QEMU exits. The run then
 // looked like a hang and burned its whole deadline before revealing a
 // one-line error.
 func TestGenerateAgent_StreamsCaughtErrorsToProgress(t *testing.T) {
-	out := string(GenerateAgent(PayloadConfig{ProgressPort: `\\.\Global\devcell`}))
+	out := string(GenerateAgent(PayloadConfig{ProgressPort: `\\.\Global\winkit`}))
 
 	catchIdx := strings.LastIndex(out, "} catch {")
 	require.Greater(t, catchIdx, 0, "agent must catch command failures")
 
 	setContent := strings.Index(out[catchIdx:], "Set-Content")
-	progress := strings.Index(out[catchIdx:], "devcell-progress")
+	progress := strings.Index(out[catchIdx:], "winkit-progress")
 	require.Greater(t, setContent, 0, "the catch block still writes the result file")
 	assert.Less(t, progress, setContent,
 		"a caught error must reach the progress stream before the result file, "+
@@ -98,8 +118,8 @@ func TestGenerateAgent_StreamsCaughtErrorsToProgress(t *testing.T) {
 // a console screenshot.
 func TestGenerateBootstrap_ReportsDrvLoadExitCodes(t *testing.T) {
 	out := string(GenerateBootstrap(PayloadConfig{
-		ProgressPort: `\\.\Global\devcell`,
-		DriverINFs:   []string{`X:\devcell\drivers\vioserial\vioser.inf`},
+		ProgressPort: `\\.\Global\winkit`,
+		DriverINFs:   []string{`X:\winkit\drivers\vioserial\vioser.inf`},
 	}))
 
 	assert.Contains(t, out, "$LASTEXITCODE",
@@ -154,8 +174,8 @@ func TestGenerateHyperVDiagScript_StructuredOutput(t *testing.T) {
 	progPort := `\\.\Global\` + ProgressPortName
 	out := string(GenerateHyperVDiagScript(progPort))
 
-	assert.Contains(t, out, "DEVCELL HYPERV DIAGNOSTICS", "must have a recognisable header")
-	assert.Contains(t, out, "DEVCELL HYPERV DIAGNOSTICS COMPLETE", "must have a completion marker")
+	assert.Contains(t, out, "WINKIT HYPERV DIAGNOSTICS", "must have a recognisable header")
+	assert.Contains(t, out, "WINKIT HYPERV DIAGNOSTICS COMPLETE", "must have a completion marker")
 
 	// System info
 	assert.Contains(t, out, "SYSTEM INFO", "must report system info")
@@ -222,13 +242,13 @@ func TestGenerateHyperVDiagScript_StructuredOutput(t *testing.T) {
 	assert.Contains(t, out, "hyperv-diag-complete", "must report completion to serial")
 
 	noSerial := string(GenerateHyperVDiagScript(""))
-	assert.NotContains(t, noSerial, "devcell:", "no serial output when progressPort is empty")
+	assert.NotContains(t, noSerial, "winkit:", "no serial output when progressPort is empty")
 }
 
 func TestHyperVDiagScriptCommand_InvokesScript(t *testing.T) {
 	cmd := HyperVDiagScriptCommand()
 	assert.Contains(t, cmd, HyperVDiagScriptName, "must reference the script name")
-	assert.Contains(t, cmd, "$DevcellVol", "must use PowerShell variable for volume ref")
+	assert.Contains(t, cmd, "$WinkitVol", "must use PowerShell variable for volume ref")
 }
 
 func TestGenerateShellINI_NoSetup_RunsOnlyBootstrap(t *testing.T) {
@@ -243,7 +263,7 @@ func TestGenerateShellINI_NoSetup_RunsOnlyBootstrap(t *testing.T) {
 func TestGenerateBootstrap_WPEInit(t *testing.T) {
 	out := string(GenerateBootstrap(PayloadConfig{WPEInit: true, ProgressPort: `\\.\Global\` + ProgressPortName}))
 	wpeinitIdx := strings.Index(out, "wpeinit")
-	bootstrapIdx := strings.Index(out, "devcell:")
+	bootstrapIdx := strings.Index(out, "winkit:")
 	assert.Positive(t, wpeinitIdx, "must call wpeinit")
 	assert.Less(t, wpeinitIdx, bootstrapIdx, "wpeinit must run before any progress output")
 }
@@ -279,17 +299,17 @@ func TestGenerateBootstrapCmd_ProbesForPwsh(t *testing.T) {
 }
 
 func TestGenerateEchoProbeScript_ProbesCOM1Through4(t *testing.T) {
-	out := string(GenerateEchoProbeScript("devcell-logs"))
+	out := string(GenerateEchoProbeScript("winkit-logs"))
 	assert.Contains(t, out, "COM PORT PROBE")
 	for i := 1; i <= 4; i++ {
-		marker := "DEVCELL_COM_ECHO_COM" + string(rune('0'+i))
+		marker := "WINKIT_COM_ECHO_COM" + string(rune('0'+i))
 		assert.Contains(t, out, marker, "must echo marker for COM%d", i)
 	}
 	assert.Contains(t, out, "COM PROBE DONE")
 }
 
 func TestGenerateEchoProbeScript_LoadsViofsDriver(t *testing.T) {
-	out := string(GenerateEchoProbeScript("devcell-logs"))
+	out := string(GenerateEchoProbeScript("winkit-logs"))
 	assert.Contains(t, out, "drvload.exe")
 	assert.Contains(t, out, "viofs.inf")
 }
@@ -297,13 +317,13 @@ func TestGenerateEchoProbeScript_LoadsViofsDriver(t *testing.T) {
 func TestGenerateEchoProbeScript_MountsVirtiofs(t *testing.T) {
 	out := string(GenerateEchoProbeScript("my-tag"))
 	assert.Contains(t, out, `virtiofs.exe" mount -t my-tag V:`)
-	assert.Contains(t, out, "DEVCELL_VIOFS_HELLO")
+	assert.Contains(t, out, "WINKIT_VIOFS_HELLO")
 	assert.Contains(t, out, "viofs-probe.txt")
 }
 
 func TestGenerateEchoProbeScript_RunsToCompletion(t *testing.T) {
-	out := string(GenerateEchoProbeScript("devcell-logs"))
-	assert.Contains(t, out, "DEVCELL ECHO PROBE COMPLETE")
+	out := string(GenerateEchoProbeScript("winkit-logs"))
+	assert.Contains(t, out, "WINKIT ECHO PROBE COMPLETE")
 }
 
 func TestDiagToolPaths_ContainsCoreTools(t *testing.T) {
@@ -323,7 +343,7 @@ func TestDiagToolPaths_ContainsCoreTools(t *testing.T) {
 func TestEchoProbeScriptCommand_InvokesOnAnswerVolume(t *testing.T) {
 	cmd := EchoProbeScriptCommand()
 	assert.Contains(t, cmd, EchoProbeScriptName)
-	assert.Contains(t, cmd, "$DevcellVol")
+	assert.Contains(t, cmd, "$WinkitVol")
 }
 
 func TestGeneratedPS1_SyntaxValid(t *testing.T) {
@@ -339,8 +359,8 @@ func TestGeneratedPS1_SyntaxValid(t *testing.T) {
 		PollSeconds:  5,
 		SyncAgent:    true,
 		DriverINFs: []string{
-			`X:\devcell\drivers\vioserial\vioser.inf`,
-			`X:\devcell\drivers\vioscsi\vioscsi.inf`,
+			`X:\winkit\drivers\vioserial\vioser.inf`,
+			`X:\winkit\drivers\vioscsi\vioscsi.inf`,
 		},
 	}
 
@@ -349,7 +369,7 @@ func TestGeneratedPS1_SyntaxValid(t *testing.T) {
 		"agent.ps1":       GenerateAgent(cfg),
 		"winpe-diag.ps1":  GenerateDiagScript(),
 		"hyperv-diag.ps1": GenerateHyperVDiagScript(progressPort),
-		"echo-probe.ps1":  GenerateEchoProbeScript("devcell-viofs"),
+		"echo-probe.ps1":  GenerateEchoProbeScript("winkit-viofs"),
 	}
 
 	outDir := t.TempDir()

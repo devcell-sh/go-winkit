@@ -53,7 +53,7 @@ func TransplantWSLIntoBootWimLogged(bootWimPath, wslDir, installWimPath string, 
 		}
 	}
 
-	shimStaging, err := os.MkdirTemp("", "devcell-wsl-shim-stage-*")
+	shimStaging, err := os.MkdirTemp("", "winkit-wsl-shim-stage-*")
 	if err != nil {
 		return fmt.Errorf("shim staging dir: %w", err)
 	}

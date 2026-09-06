@@ -1,9 +1,9 @@
 {{define "stage-transcript"}}{{template "logging" .}}
-if ($script:DevcellLogVol) { try { Start-Transcript -Path ($script:DevcellLogVol + ':\{{.LogName}}.full') -Append | Out-Null } catch { Write-Output ('[log] transcript failed: ' + $_.Exception.Message) } }
-Write-DevcellLog ('=== stage: {{.StageName}} ===')
+if ($script:WinkitLogVol) { try { Start-Transcript -Path ($script:WinkitLogVol + ':\{{.LogName}}.full') -Append | Out-Null } catch { Write-Output ('[log] transcript failed: ' + $_.Exception.Message) } }
+Write-WinkitLog ('=== stage: {{.StageName}} ===')
 try {
 {{.Script}}
 } finally {
-    Write-DevcellLog ('=== stage end: {{.StageName}} ===')
-    if ($script:DevcellLogVol) { try { Stop-Transcript | Out-Null } catch {} }
+    Write-WinkitLog ('=== stage end: {{.StageName}} ===')
+    if ($script:WinkitLogVol) { try { Stop-Transcript | Out-Null } catch {} }
 }{{end}}

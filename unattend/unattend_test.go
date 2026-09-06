@@ -23,7 +23,8 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, DefaultSessionUser, cfg.Username)
 	assert.Equal(t, "rdp", cfg.Password)
 	assert.Equal(t, "en-US", cfg.Locale)
-	assert.Equal(t, "devcell-win", cfg.Hostname)
+	assert.Equal(t, "winkit", cfg.Hostname)
+	assert.Equal(t, "winkit", cfg.DistroName)
 	assert.Equal(t, "UTC", cfg.TimeZone)
 	assert.Empty(t, cfg.VirtIODrivers, "inbox NVMe/usbstor drivers cover the default devices")
 }
@@ -37,6 +38,27 @@ func TestGenerateXML_ValidXML(t *testing.T) {
 	}
 	require.NoError(t, xml.Unmarshal(out, &parsed), "output must be valid XML")
 	assert.Equal(t, "unattend", parsed.XMLName.Local)
+}
+
+// WSL1 distros cannot register without the Microsoft-Windows-Subsystem-Linux
+// optional feature (wsl --import --version 1 exits -1, run 20260903T160300).
+// The specialize dism enables it so the reboot into OOBE completes it before
+// the bootstrap imports nix.wsl. It must be valid XML (dism's 3010 exit is
+// swallowed) and absent when not requested.
+func TestGenerateXML_WSL1FeatureEnable(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableWSL1Feature = true
+	out := string(GenerateXML(cfg))
+	assert.Contains(t, out, "/enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart")
+	assert.Contains(t, out, `exit /b 0"</Path>`, "a 3010 (restart required) exit must not abort Setup")
+
+	var parsed struct {
+		XMLName xml.Name `xml:"unattend"`
+	}
+	require.NoError(t, xml.Unmarshal([]byte(out), &parsed))
+
+	assert.NotContains(t, string(GenerateXML(DefaultConfig())), "enable-feature",
+		"no dism command without EnableWSL1Feature")
 }
 
 func TestGenerateXML_ContainsLabConfig(t *testing.T) {
@@ -60,7 +82,7 @@ func TestGenerateXML_ContainsVirtIODrivers(t *testing.T) {
 	assert.Contains(t, out, `viostor\w11\ARM64\viostor.inf`)
 	assert.Contains(t, out, `NetKVM\w11\ARM64\netkvm.inf`)
 	// One probing command per driver, at distinct Order values.
-	assert.Equal(t, 2, strings.Count(out, "pnputil.exe /add-driver"))
+	assert.Equal(t, 2, strings.Count(out, "pnputil /add-driver"))
 }
 
 func TestDefaultConfig_NoVirtIODriversNeeded(t *testing.T) {
@@ -191,7 +213,7 @@ func TestGenerateXML_AnswerDriversDrvloadBeforeMediaSearch(t *testing.T) {
 	assert.Empty(t, Validate(xmlBytes))
 }
 
-func TestBuildAnswerVolume_ShipsAnswerDriversByteExact(t *testing.T) {
+func TestBuildAnswerVolume_ShipsAnswerDrivers(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AnswerDrivers = map[string][]byte{
 		"/drivers/vioscsi/vioscsi.inf": []byte("[Version]\r\nSignature=\"$WINDOWS NT$\"\r\n"),
@@ -200,24 +222,28 @@ func TestBuildAnswerVolume_ShipsAnswerDriversByteExact(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "answer.img")
 	require.NoError(t, BuildAnswerVolume(cfg, dest))
 
-	// Byte-exact, NOT padded: Setup's driver import validates the files
-	// against the catalog's hashes, and PadForFAT's trailing newlines break
-	// them (run 20260812T141319).
+	// Drivers are cluster-padded (not byte-exact): they're only consumed
+	// by WinPE's drvload which doesn't verify Authenticode; the installed-
+	// OS copy comes from the virtio-win CD via pnputil in specialize.
 	inf, err := isokit.ReadFileFromFAT(dest, "/drivers/vioscsi/vioscsi.inf")
 	require.NoError(t, err)
-	assert.Equal(t, cfg.AnswerDrivers["/drivers/vioscsi/vioscsi.inf"], inf, "INF must ship byte-exact")
+	want := cfg.AnswerDrivers["/drivers/vioscsi/vioscsi.inf"]
+	assert.True(t, len(inf) >= len(want), "read-back must be at least original size")
+	assert.Equal(t, want, inf[:len(want)], "INF prefix must match original content")
 	sys, err := isokit.ReadFileFromFAT(dest, "/drivers/vioscsi/vioscsi.sys")
 	require.NoError(t, err)
-	assert.Equal(t, cfg.AnswerDrivers["/drivers/vioscsi/vioscsi.sys"], sys, "driver binary must ship byte-exact")
+	wantSys := cfg.AnswerDrivers["/drivers/vioscsi/vioscsi.sys"]
+	assert.True(t, len(sys) >= len(wantSys), "read-back must be at least original size")
+	assert.Equal(t, wantSys, sys[:len(wantSys)], "driver binary prefix must match original content")
 }
 
 // The agent can execute one pre-baked command and write its output to
-// devcell-out.txt — the only way to see drvload's actual error text and
+// winkit-out.txt — the only way to see drvload's actual error text and
 // diskpart's volume list inside a WinPE that has no network and no QGA.
 func TestBuildAnswerVolume_ShipsAgentCommand(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.WinPEAgent = true
-	cfg.AgentCommand = `& drvload.exe "$DevcellVol\$WinPEDriver$\vioscsi\vioscsi.inf"; Write-Output "DRVLOAD_RC=$LASTEXITCODE"`
+	cfg.AgentCommand = `& drvload.exe "$WinkitVol\$WinPEDriver$\vioscsi\vioscsi.inf"; Write-Output "DRVLOAD_RC=$LASTEXITCODE"`
 	dest := filepath.Join(t.TempDir(), "answer.img")
 	require.NoError(t, BuildAnswerVolume(cfg, dest))
 
@@ -240,9 +266,9 @@ func TestBuildAnswerVolume_NoAgentCommandFileWithoutCommand(t *testing.T) {
 func TestGenerateXML_ContainsUserCreation(t *testing.T) {
 	t.Setenv("USER", "")
 	out := string(GenerateXML(DefaultConfig()))
-	assert.Contains(t, out, "<Name>devcell</Name>")
+	assert.Contains(t, out, "<Name>winkit</Name>")
 	assert.Contains(t, out, "<Group>Administrators</Group>")
-	assert.Contains(t, out, "<Username>devcell</Username>")
+	assert.Contains(t, out, "<Username>winkit</Username>")
 }
 
 // SSH setup, key injection, power settings and diagnostics all moved out of
@@ -267,7 +293,7 @@ func TestGenerateXML_CustomConfig(t *testing.T) {
 	assert.Contains(t, out, "<ComputerName>custom-host</ComputerName>")
 	assert.Contains(t, out, "<TimeZone>CET</TimeZone>")
 	assert.Contains(t, out, `custom\driver\custom.inf`)
-	assert.Equal(t, 1, strings.Count(out, "pnputil.exe /add-driver"))
+	assert.Equal(t, 1, strings.Count(out, "pnputil /add-driver"))
 }
 
 func TestGenerateXML_ARM64Architecture(t *testing.T) {
@@ -497,15 +523,15 @@ func TestGenerateXML_ImageNameIsConfigurable(t *testing.T) {
 
 func TestGenerateXML_InstallWimPath(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.InstallWimPath = `X:\devcell-install.wim`
+	cfg.InstallWimPath = `X:\winkit-install.wim`
 	out := string(GenerateXML(cfg))
-	assert.Contains(t, out, `<Path>X:\devcell-install.wim</Path>`)
+	assert.Contains(t, out, `<Path>X:\winkit-install.wim</Path>`)
 	assert.Contains(t, out, "<InstallFrom>")
 }
 
 func TestGenerateXML_NoInstallWimPath(t *testing.T) {
 	out := string(GenerateXML(DefaultConfig()))
-	assert.NotContains(t, out, "devcell-install.wim")
+	assert.NotContains(t, out, "winkit-install.wim")
 }
 
 func TestWriteImage_PreservesLongFilename(t *testing.T) {
@@ -576,7 +602,7 @@ func TestGenerateXML_NoUnschemaedLabConfigElement(t *testing.T) {
 }
 
 func TestSessionUsername_UsesHostUser(t *testing.T) {
-	// devcell's HOST_USER model: the guest account matches the host's $USER,
+	// winkit's HOST_USER model: the guest account matches the host's $USER,
 	// the same way tart derives its session user. A hardcoded name would give
 	// a Windows VM a different account from every other engine.
 	t.Setenv("USER", "dmitry")
@@ -585,7 +611,7 @@ func TestSessionUsername_UsesHostUser(t *testing.T) {
 
 func TestSessionUsername_FallsBackWhenUnset(t *testing.T) {
 	t.Setenv("USER", "")
-	assert.Equal(t, "devcell", SessionUsername())
+	assert.Equal(t, "winkit", SessionUsername())
 }
 
 func TestDefaultConfig_UsesHostUser(t *testing.T) {
@@ -688,24 +714,101 @@ func TestGenerateXML_NoWinPEDriverInjection(t *testing.T) {
 	assert.NotContains(t, out, "<DriverPaths>")
 }
 
-func TestGenerateXML_InstallsDriversInSpecialize(t *testing.T) {
-	// specialize runs in the full installed OS: drive letters can be probed
-	// harmlessly with `if exist`, and pnputil both stages the driver and
-	// binds it to the already-present virtio NIC.
+func TestGenerateXML_StagesDriversInSpecialize(t *testing.T) {
+	// Drivers are staged (pnputil /add-driver, no /install) in specialize so
+	// PnP auto-installs them on the OOBE boot. /install during specialize
+	// triggers PnP enumeration during Setup's own device-setup phase, causing
+	// a reboot loop (run 20260831T202847). Staging only adds to the store.
 	cfg := DefaultConfig()
 	cfg.VirtIODrivers = NetKVMDriverPaths()
 	out := string(GenerateXML(cfg))
 
 	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
-	assert.Contains(t, specialize, "pnputil.exe /add-driver")
-	assert.Contains(t, specialize, `\NetKVM\w11\ARM64\netkvm.inf`)
-	assert.Contains(t, specialize, "Test-Path")
-	assert.Contains(t, specialize, "exit 0")
 
-	deployIdx := strings.Index(specialize, `name="Microsoft-Windows-Deployment"`)
-	require.Positive(t, deployIdx)
-	assert.Greater(t, strings.Index(specialize, "pnputil"), deployIdx,
-		"driver install must sit in Deployment RunSynchronous")
+	// Staged in specialize with pnputil /add-driver (no /install).
+	assert.Contains(t, specialize, "pnputil /add-driver",
+		"driver must be staged in specialize")
+	assert.Contains(t, specialize, `\NetKVM\w11\ARM64\netkvm.inf`)
+	assert.NotContains(t, specialize, "pnputil /add-driver"+` %d:\NetKVM\w11\ARM64\netkvm.inf /install`,
+		"specialize must NOT use /install (causes reboot loop)")
+	assert.Contains(t, specialize, "if exist",
+		"driver stage is guarded by `if exist`, a no-op if the CD letter misses")
+
+	// Driver staging must precede the bootstrap copy and gosshd.
+	assert.Less(t, strings.Index(specialize, "pnputil"), strings.Index(specialize, "winkit-bootstrap.ps1"),
+		"driver stage must precede the bootstrap copy")
+
+	// No driver install commands in FirstLogonCommands: PnP handles it.
+	flc := out[strings.Index(out, "<FirstLogonCommands>"):strings.Index(out, "</FirstLogonCommands>")]
+	assert.NotContains(t, flc, "<CommandLine>cmd /c",
+		"no pnputil commands in FirstLogonCommands; drivers are staged in specialize")
+}
+
+// TestValidateRejectsOverlongCommand proves the generator validator (which
+// writeAnswerImage runs before writing the volume) fails a too-long command, so
+// a regression is caught at build time, not after a multi-hour install.
+func TestValidateRejectsOverlongCommand(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	xmlDoc := `<?xml version="1.0"?><unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Deployment">
+      <RunSynchronous>
+        <RunSynchronousCommand><Order>1</Order><Path>` + long + `</Path></RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+</unattend>`
+	errs := Validate([]byte(xmlDoc))
+	var found bool
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "limit 259") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Validate must reject a 300-char <Path>; got errors: %v", errs)
+	}
+
+	// And a short command validates clean on that axis.
+	short := strings.ReplaceAll(xmlDoc, long, `cmd /c "echo hi"`)
+	for _, e := range Validate([]byte(short)) {
+		if strings.Contains(e.Error(), "limit 259") {
+			t.Errorf("short command wrongly flagged: %v", e)
+		}
+	}
+}
+
+// TestUnattendCommandsUnderPathLimit guards the 259-char cap Windows Setup
+// enforces on every RunSynchronousCommand/Path and SynchronousCommand/CommandLine.
+// Exceeding it makes Setup reject the whole answer file (0x80220005) and abort
+// specialize — a silent "computer restarted unexpectedly" loop (run
+// 20260831T205732). This test fails loudly if a command grows too long.
+func TestUnattendCommandsUnderPathLimit(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableRDP = true
+	cfg.VirtIODrivers = append(NetKVMDriverPaths(), VioserialDriverPaths()...)
+	out := string(GenerateXML(cfg))
+
+	const limit = 259
+	for _, tag := range []string{"Path", "CommandLine"} {
+		open, close := "<"+tag+">", "</"+tag+">"
+		for rest := out; ; {
+			i := strings.Index(rest, open)
+			if i < 0 {
+				break
+			}
+			j := strings.Index(rest[i:], close)
+			if j < 0 {
+				break
+			}
+			val := rest[i+len(open) : i+j]
+			if len(val) > limit {
+				t.Errorf("<%s> is %d chars (>%d), Setup will reject the answer file:\n%s",
+					tag, len(val), limit, val)
+			}
+			rest = rest[i+j+len(close):]
+		}
+	}
 }
 
 func TestGenerateXML_SpecializeCopiesBootstrapToC(t *testing.T) {
@@ -714,37 +817,42 @@ func TestGenerateXML_SpecializeCopiesBootstrapToC(t *testing.T) {
 	out := string(GenerateXML(cfg))
 
 	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
-	assert.Contains(t, specialize, `devcell-bootstrap.ps1`)
-	assert.Contains(t, specialize, `Copy-Item`)
-	assert.Contains(t, specialize, `C:\devcell-bootstrap.ps1`)
-	assert.Contains(t, specialize, "exit 0",
-		"bootstrap copy must not abort the install if the source is missing")
+	assert.Contains(t, specialize, `winkit-bootstrap.ps1`)
+	assert.Contains(t, specialize, `copy /y`)
+	assert.Contains(t, specialize, `C:\winkit-bootstrap.ps1`)
+	assert.Contains(t, specialize, "if exist",
+		"bootstrap copy is guarded by `if exist`, a no-op if the source is missing")
 }
 
-func TestGenerateXML_FirstLogonTriesFixedPathFirst(t *testing.T) {
+func TestGenerateXML_SMBIOSHostnameTask(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SMBIOSHostname = true
+	out := string(GenerateXML(cfg))
+	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
+	assert.Contains(t, specialize, "winkit-hostname",
+		"SMBIOSHostname must register the hostname-sync scheduled task")
+	assert.Contains(t, specialize, "Win32_BIOS",
+		"hostname task must read SMBIOS via WMI")
+	assert.Contains(t, specialize, "Rename-Computer",
+		"hostname task must call Rename-Computer")
+
+	cfg2 := DefaultConfig()
+	cfg2.SMBIOSHostname = false
+	out2 := string(GenerateXML(cfg2))
+	assert.NotContains(t, out2, "winkit-hostname",
+		"without SMBIOSHostname, no hostname task")
+}
+
+func TestGenerateXML_FirstLogonLaunchesBootstrapFromC(t *testing.T) {
 	cfg := DefaultConfig()
 	out := string(GenerateXML(cfg))
 
 	oobe := out[strings.Index(out, `pass="oobeSystem"`):]
-	assert.Contains(t, oobe, `C:\devcell-bootstrap.ps1`,
-		"FirstLogonCommands must try the fixed C:\\ copy before scanning volumes")
-	assert.Contains(t, oobe, "Get-Volume",
-		"FirstLogonCommands must still fall back to volume scan")
-}
-
-func TestGenerateXML_SpecializeBootstrapOrderFollsDrivers(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.VirtIODrivers = NetKVMDriverPaths()
-	out := string(GenerateXML(cfg))
-
-	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
-
-	driverIdx := strings.Index(specialize, "pnputil")
-	copyIdx := strings.Index(specialize, `Copy-Item`)
-	require.Positive(t, driverIdx)
-	require.Positive(t, copyIdx)
-	assert.Greater(t, copyIdx, driverIdx,
-		"bootstrap copy must run after driver installs")
+	// specialize copies the bootstrap to C:\, so first logon launches it from
+	// the fixed path with a short command (a volume-scan fallback would blow the
+	// 259-char command cap).
+	assert.Contains(t, oobe, `-File C:\winkit-bootstrap.ps1`,
+		"FirstLogonCommands launches the bootstrap from the fixed C:\\ path")
 }
 
 func TestGenerateXML_WinPERunsOnlyRegCommands(t *testing.T) {
@@ -799,7 +907,7 @@ func TestGenerateXML_NoWinPEDriveInventory(t *testing.T) {
 	// (Get-Volume) instead, which runs in the full OS.
 	out := string(GenerateXML(DefaultConfig()))
 
-	assert.NotContains(t, out, "devcell-drives.txt")
+	assert.NotContains(t, out, "winkit-drives.txt")
 	// "wmic " with the trailing space: the WMIConfig xmlns is fine, invoking
 	// the removed wmic.exe is not.
 	assert.NotContains(t, strings.ToLower(out), "wmic ")
