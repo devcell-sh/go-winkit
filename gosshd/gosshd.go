@@ -17,12 +17,14 @@ package gosshd
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os/exec"
+	"time"
 
 	"github.com/gliderlabs/ssh"
 )
@@ -50,9 +52,55 @@ type Server struct {
 	// Log receives connection events. Discarded when nil.
 	Log *log.Logger
 
+	// Shell selects the interpreter sessions run under. "" or "cmd" uses
+	// cmd.exe — the WinPE-safe default, because full Windows PowerShell is not
+	// guaranteed on WinPE's PATH (pwsh is staged elsewhere). "powershell" uses
+	// Windows PowerShell (System32\...\powershell.exe), which the wsl2
+	// provisioning server runs under so the host can send PowerShell directly.
+	Shell string
+
+	// Events receives one structured JSON line per session (command, exit
+	// code, captured stdout/stderr, duration). Discarded when nil. In the
+	// guest this is the virtio-serial structured port whose host end is
+	// build.jsonl, giving a durable 1:1 record of everything run over SSH.
+	Events io.Writer
+
 	// command builds a session's argv; SessionCommand when nil. Tests set
 	// it to run a POSIX shell on the dev machine instead of cmd.exe.
 	command func(request string) []string
+}
+
+// sessionEvent is one structured record emitted per SSH session. Its wire
+// shape is a superset of winpe.GuestEvent (ts + event + typed extras), so
+// the same build.jsonl parser reads it losslessly alongside build events.
+type sessionEvent struct {
+	TS         string `json:"ts"`
+	Event      string `json:"event"`
+	Remote     string `json:"remote"`
+	Command    string `json:"command"`
+	Exit       int    `json:"exit"`
+	DurationMS int64  `json:"duration_ms"`
+	Stdout     string `json:"stdout"`
+	Stderr     string `json:"stderr"`
+	RunError   string `json:"run_error,omitempty"`
+}
+
+// maxCapture bounds the per-stream output retained for the structured
+// event so a runaway command cannot exhaust guest memory; the live SSH
+// stream to the client is never truncated.
+const maxCapture = 256 * 1024
+
+// emitSession writes one structured session record to Events. Emission
+// never fails a session: a full or closed port must not break SSH.
+func (s Server) emitSession(ev sessionEvent) {
+	if s.Events == nil {
+		return
+	}
+	line, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	s.Events.Write(append(line, '\n'))
 }
 
 // Authenticate reports whether the offered credentials are the configured
@@ -69,12 +117,26 @@ func (s Server) Authenticate(user, password string) bool {
 	return userOK&passOK == 1
 }
 
-// SessionCommand is the argv for a session. An empty request means the
-// client asked for a shell rather than a single command.
+// SessionCommand is the argv for a session under cmd.exe. An empty request
+// means the client asked for a shell rather than a single command.
 //
 // cmd.exe rather than pwsh: WinPE always has it, and the harness stages
 // pwsh at a path that is not on PATH.
 func SessionCommand(request string) []string {
+	return SessionCommandShell(request, "cmd")
+}
+
+// SessionCommandShell is the argv for a session under the named shell: "cmd"
+// (default) or "powershell". Under powershell the request is passed as a single
+// -Command argument, so the host can send a PowerShell one-liner verbatim with
+// no cmd re-parsing — what the wsl2 provisioning path relies on.
+func SessionCommandShell(request, shell string) []string {
+	if shell == "powershell" {
+		if request == "" {
+			return []string{"powershell.exe", "-NoProfile"}
+		}
+		return []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", request}
+	}
 	if request == "" {
 		return []string{"cmd.exe"}
 	}
@@ -93,18 +155,40 @@ func (s Server) logf(format string, args ...any) {
 func (s Server) handle(sess ssh.Session) {
 	buildArgv := s.command
 	if buildArgv == nil {
-		buildArgv = SessionCommand
+		buildArgv = func(request string) []string { return SessionCommandShell(request, s.Shell) }
 	}
-	argv := buildArgv(sess.RawCommand())
+	request := sess.RawCommand()
+	argv := buildArgv(request)
 	s.logf("session from %s: %v", sess.RemoteAddr(), argv)
 
+	// Tee stdout/stderr: the client still gets the full live stream, and a
+	// bounded copy is retained for the structured build.jsonl record.
+	var outCap, errCap capBuffer
+	outCap.limit, errCap.limit = maxCapture, maxCapture
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdout = sess
-	cmd.Stderr = sess.Stderr()
+	cmd.Stdout = io.MultiWriter(sess, &outCap)
+	cmd.Stderr = io.MultiWriter(sess.Stderr(), &errCap)
+
+	ev := sessionEvent{
+		Event:   "ssh_session",
+		Remote:  sess.RemoteAddr().String(),
+		Command: request,
+	}
+	start := time.Now()
+	finish := func(exit int) {
+		ev.TS = time.Now().UTC().Format(time.RFC3339Nano)
+		ev.Exit = exit
+		ev.DurationMS = time.Since(start).Milliseconds()
+		ev.Stdout = outCap.String()
+		ev.Stderr = errCap.String()
+		s.emitSession(ev)
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		fmt.Fprintln(sess.Stderr(), "devcell: stdin pipe:", err)
+		fmt.Fprintln(sess.Stderr(), "winkit: stdin pipe:", err)
+		ev.RunError = err.Error()
+		finish(1)
 		sess.Exit(1)
 		return
 	}
@@ -115,17 +199,51 @@ func (s Server) handle(sess ssh.Session) {
 
 	err = cmd.Run()
 	if err == nil {
+		finish(0)
 		sess.Exit(0)
 		return
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
+		finish(exitErr.ExitCode())
 		sess.Exit(exitErr.ExitCode())
 		return
 	}
 	s.logf("session from %s failed to run: %v", sess.RemoteAddr(), err)
-	fmt.Fprintln(sess.Stderr(), "devcell: run:", err)
+	fmt.Fprintln(sess.Stderr(), "winkit: run:", err)
+	ev.RunError = err.Error()
+	finish(127)
 	sess.Exit(127)
+}
+
+// capBuffer is an io.Writer that retains at most limit bytes, dropping the
+// overflow. It records how much it dropped so the structured record can say
+// so rather than silently lie about completeness.
+type capBuffer struct {
+	buf     []byte
+	limit   int
+	dropped int
+}
+
+func (c *capBuffer) Write(p []byte) (int, error) {
+	if room := c.limit - len(c.buf); room > 0 {
+		if len(p) <= room {
+			c.buf = append(c.buf, p...)
+		} else {
+			c.buf = append(c.buf, p[:room]...)
+			c.dropped += len(p) - room
+		}
+	} else {
+		c.dropped += len(p)
+	}
+	return len(p), nil
+}
+
+func (c *capBuffer) String() string {
+	if c.dropped == 0 {
+		return string(c.buf)
+	}
+	return string(c.buf) + fmt.Sprintf("\n...[%d bytes truncated]", c.dropped)
 }
 
 func (s Server) server() *ssh.Server {

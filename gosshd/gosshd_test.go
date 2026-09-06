@@ -49,6 +49,6 @@ func TestSessionCommand_BareShellWhenNoCommandGiven(t *testing.T) {
 }
 
 func TestSessionCommand_RunsRequestedCommandThroughCmd(t *testing.T) {
-	assert.Equal(t, []string{"cmd.exe", "/c", "dir X:\\devcell"},
-		SessionCommand(`dir X:\devcell`))
+	assert.Equal(t, []string{"cmd.exe", "/c", "dir X:\\winkit"},
+		SessionCommand(`dir X:\winkit`))
 }
