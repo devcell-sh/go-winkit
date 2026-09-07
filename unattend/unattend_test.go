@@ -1042,3 +1042,109 @@ func TestAutounattend_RDPUsesNetworkLevelAuthentication(t *testing.T) {
 		"NLA on: credentials are validated before the session, so clients land on the desktop")
 	assert.NotContains(t, xml, "<UserAuthentication>0</UserAuthentication>")
 }
+
+// --- CELL-547: Features-based API tests ---
+
+func TestGenerateXML_FeaturesWSL1(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Features = []string{"Microsoft-Windows-Subsystem-Linux"}
+	out := string(GenerateXML(cfg))
+	assert.Contains(t, out, "/enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart")
+	assert.Contains(t, out, `exit /b 0"</Path>`)
+}
+
+func TestGenerateXML_FeaturesWSL1EquivalentToLegacy(t *testing.T) {
+	legacy := DefaultConfig()
+	legacy.EnableWSL1Feature = true
+	legacyXML := string(GenerateXML(legacy))
+
+	features := DefaultConfig()
+	features.Features = []string{"Microsoft-Windows-Subsystem-Linux"}
+	featuresXML := string(GenerateXML(features))
+
+	assert.Equal(t, legacyXML, featuresXML,
+		"Features-based WSL1 should produce identical XML to EnableWSL1Feature")
+}
+
+func TestGenerateXML_FeaturesRDP(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Features = []string{"RemoteDesktop"}
+	out := string(GenerateXML(cfg))
+
+	assert.Contains(t, out, "netsh advfirewall set allprofiles state off",
+		"RemoteDesktop feature should disable firewall")
+	assert.Contains(t, out, "<fDenyTSConnections>false</fDenyTSConnections>",
+		"RemoteDesktop feature should enable terminal services")
+}
+
+func TestGenerateXML_FeaturesRDPEquivalentToLegacy(t *testing.T) {
+	legacy := DefaultConfig()
+	legacy.EnableRDP = true
+	legacyXML := string(GenerateXML(legacy))
+
+	features := DefaultConfig()
+	features.Features = []string{"RemoteDesktop"}
+	featuresXML := string(GenerateXML(features))
+
+	assert.Equal(t, legacyXML, featuresXML,
+		"Features-based RemoteDesktop should produce identical XML to EnableRDP")
+}
+
+func TestGenerateXML_FeaturesContainers(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Features = []string{"Containers"}
+	out := string(GenerateXML(cfg))
+	assert.Contains(t, out, "/enable-feature /featurename:Containers /all /norestart")
+}
+
+func TestGenerateXML_FeaturesMultiple(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Features = []string{"Microsoft-Windows-Subsystem-Linux", "Containers", "RemoteDesktop"}
+	out := string(GenerateXML(cfg))
+
+	assert.Contains(t, out, "/featurename:Microsoft-Windows-Subsystem-Linux")
+	assert.Contains(t, out, "/featurename:Containers")
+	assert.Contains(t, out, "netsh advfirewall set allprofiles state off")
+	assert.NotContains(t, out, "/featurename:RemoteDesktop",
+		"RemoteDesktop is handled via TerminalServices components, not DISM")
+}
+
+func TestGenerateXML_NoFeaturesMinimalXML(t *testing.T) {
+	cfg := DefaultConfig()
+	out := string(GenerateXML(cfg))
+	assert.NotContains(t, out, "enable-feature")
+}
+
+func TestHasFeature(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Features = []string{"OpenSSH.Server"}
+	assert.True(t, cfg.HasFeature("OpenSSH.Server"))
+	assert.True(t, cfg.HasFeature("openssh.server"), "case-insensitive")
+	assert.False(t, cfg.HasFeature("Containers"))
+}
+
+func TestHasFeature_LegacyBooleans(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableWSL1Feature = true
+	assert.True(t, cfg.HasFeature("Microsoft-Windows-Subsystem-Linux"))
+
+	cfg2 := DefaultConfig()
+	cfg2.EnableRDP = true
+	assert.True(t, cfg2.HasFeature("RemoteDesktop"))
+}
+
+func TestDISMFeatures_Deduplication(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableWSL1Feature = true
+	cfg.Features = []string{"Microsoft-Windows-Subsystem-Linux", "Containers"}
+
+	features := cfg.DISMFeatures()
+	wslCount := 0
+	for _, f := range features {
+		if strings.EqualFold(f, "Microsoft-Windows-Subsystem-Linux") {
+			wslCount++
+		}
+	}
+	assert.Equal(t, 1, wslCount, "WSL1 should not be duplicated")
+	assert.Contains(t, features, "Containers")
+}

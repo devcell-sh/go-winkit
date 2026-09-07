@@ -10,7 +10,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/devcell-sh/go-wimlib"
+	"github.com/devcell-sh/go-winkit/buildopts"
 	"github.com/devcell-sh/go-winkit/cache"
+	"github.com/devcell-sh/go-winkit/config"
 	"github.com/devcell-sh/go-winkit/imageformat"
 	"github.com/devcell-sh/go-winkit/mctcatalog"
 	"github.com/devcell-sh/go-winkit/uupdump"
@@ -23,23 +25,8 @@ import (
 // guest writes logs back to the volume.
 const baseImageCapacity = 4 * 1024 * 1024 * 1024
 
-// stageSpec declares per-stage accelerator constraints. BuildAccel lists
-// accelerators valid for the install/build VM; RunAccel lists those valid
-// for the verify/continue VM (where the produced disk is booted). A nil
-// RunAccel means any accelerator works for running.
-type stageSpec struct {
-	buildAccel []string
-	runAccel   []string
-}
-
-var stageSpecs = map[string]stageSpec{
-	"core": {buildAccel: []string{"hvf", "kvm", "tcg"}},
-	"base": {buildAccel: []string{"hvf", "kvm", "tcg"}},
-	"wsl": {
-		buildAccel: []string{"hvf", "kvm", "tcg"},
-		runAccel:   []string{"tcg", "kvm"},
-	},
-}
+// buildAccels lists accelerators valid for the build VM.
+var buildAccels = []string{"hvf", "kvm", "tcg"}
 
 // accelBase strips trailing options ("tcg,thread=multi" → "tcg") for
 // constraint checking.
@@ -61,14 +48,29 @@ func validAccel(accel string, allowed []string) bool {
 	return false
 }
 
+// resolveStage maps BuildOpts to the internal stage name used by the build
+// pipeline. This bridges the new config model to the existing pipeline.
+func resolveStage(opts *buildopts.BuildOpts) string {
+	if opts.PE {
+		return "core"
+	}
+	if opts.WSL != nil {
+		return "wsl"
+	}
+	return "base"
+}
+
 func newBuildCmd() *cobra.Command {
 	var (
-		stage         string
+		configFile    string
+		peFlag        bool
+		wslFlag       bool
+		wslImage      string
+		fromFlag      string
 		imageTypeFlag string
 		accel         string
-		spec          uupdump.MediaSpec
+		vncDisplay    int
 		noCache       bool
-		nixHome       string
 		cacheDir      string
 		force         bool
 		noHypervisor  bool
@@ -76,17 +78,12 @@ func newBuildCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build [dest]",
 		Short: "Build a bootable Windows image",
-		Long: "Builds a bootable Windows image from the cached Windows and virtio-win\n" +
-			"ISOs (downloading them if absent).\n\n" +
-			"Stages (each includes everything from the previous stage):\n" +
-			"  core — install Windows with gosshd and virtio drivers enabled.\n" +
-			"  A minimal WinPE boot volume.\n" +
-			"  base (default) — core plus OpenSSH, RDP, pwsh, and standard\n" +
-			"  provisioning. Ready for general use.\n" +
-			"  wsl — a full unattended Windows install to disk (not WinPE):\n" +
-			"  installs Windows, brings up SSH+RDP, then enables VirtualMachine-\n" +
-			"  Platform/WSL/Hyper-V online. The installed OS actually launches the\n" +
-			"  hypervisor (unlike WinPE). Long-running; requires the MCT lane.\n\n" +
+		Long: "Builds a bootable Windows image. Configuration is loaded from\n" +
+			"winkit.yaml (or -f path), with CLI flags as overrides.\n\n" +
+			"Build modes:\n" +
+			"  (default) — full disk install (~64GB qcow2, persistent OS)\n" +
+			"  --pe      — WinPE boot volume (~4GB, ephemeral)\n" +
+			"  --wsl     — full disk install + WSL distro imported\n\n" +
 			"dest may be a directory (default ./) or a .qcow2 path. Requires a\n" +
 			"wimlib-enabled build (-tags wimlib).",
 		Args: cobra.MaximumNArgs(1),
@@ -94,22 +91,60 @@ func newBuildCmd() *cobra.Command {
 			if err := requireWimlib(); err != nil {
 				return err
 			}
-			switch stage {
-			case "core":
-				stage = "core"
-			case "base", "default", "":
-				stage = "base"
-			case "wsl", "wsl2": // "wsl2" is the deprecated old name
-				stage = "wsl"
-			default:
-				return fmt.Errorf("unknown stage %q (want core, base, or wsl)", stage)
+
+			ui := newRunUI(cmd)
+
+			// Load config from yaml (optional).
+			cfg, cfgPath, err := loadBuildConfig(configFile)
+			if err != nil {
+				return err
 			}
-			if accel != "" {
-				ss := stageSpecs[stage]
-				if !validAccel(accel, ss.buildAccel) {
-					return fmt.Errorf("accelerator %q is not valid for stage %q (want %s)",
-						accel, stage, strings.Join(ss.buildAccel, ", "))
+			if cfgPath != "" {
+				ui.Logger.Debug("loaded config", "path", cfgPath)
+			}
+
+			// Apply CLI flag overrides.
+			if cmd.Flags().Changed("from") {
+				cfg.From = fromFlag
+			}
+			if cmd.Flags().Changed("pe") {
+				cfg.PE = peFlag
+			}
+			if cmd.Flags().Changed("wsl") || cmd.Flags().Changed("wsl-image") {
+				if wslFlag || wslImage != "" {
+					image := wslImage
+					if image == "" {
+						image = "alpine"
+					}
+					cfg.WSL = &config.WSLConfig{Image: image}
+				} else {
+					cfg.WSL = nil
 				}
+			}
+
+			if err := cfg.Validate(); err != nil {
+				return err
+			}
+
+			// Convert to BuildOpts.
+			opts, err := cfg.ToBuildOpts()
+			if err != nil {
+				return err
+			}
+
+			stage := resolveStage(opts)
+
+			if accel != "" {
+				if !validAccel(accel, buildAccels) {
+					return fmt.Errorf("accelerator %q is not valid (want %s)",
+						accel, strings.Join(buildAccels, ", "))
+				}
+			}
+
+			displayType := ""
+			if vncDisplay >= 0 {
+				displayType = fmt.Sprintf("vnc=:%d", vncDisplay)
+				ui.Logger.Info("VNC server enabled", "display", vncDisplay, "port", 5900+vncDisplay)
 			}
 
 			imgFmt, err := imageformat.ParseFormat(imageTypeFlag)
@@ -133,7 +168,18 @@ func newBuildCmd() *cobra.Command {
 			if cacheDir == "" {
 				cacheDir = cache.Dir()
 			}
-			ui := newRunUI(cmd)
+
+			hostLog := filepath.Join(filepath.Dir(dest), "host.jsonl")
+			if err := ui.AttachLogFile(hostLog); err != nil {
+				return err
+			}
+
+			// Resolve media spec from BuildOpts.From for the fetch pipeline.
+			spec, err := specFromFrom(opts.From)
+			if err != nil {
+				return err
+			}
+
 			err = func() error {
 				logger := ui.Logger
 
@@ -156,15 +202,18 @@ func newBuildCmd() *cobra.Command {
 					qcow2Dest = filepath.Join(workDir, "disk.qcow2")
 				}
 
-				if stage == "wsl" {
-					if err := buildWSLImage(cmd.Context(), qcow2Dest, cacheDir, winISO, virtioISO, workDir, ui, noCache, accel, resolveNixHome(nixHome)); err != nil {
+				switch stage {
+				case "wsl":
+					if err := buildWSLImage(cmd.Context(), qcow2Dest, cacheDir, winISO, virtioISO, workDir, ui, noCache, accel, resolveNixHome(""), displayType); err != nil {
 						return err
 					}
-				} else {
-					arch := spec.Arch
-					if arch == "" {
-						arch = "arm64"
+				case "base":
+					if err := buildBaseInstallImage(cmd.Context(), qcow2Dest, cacheDir, winISO, virtioISO, workDir, opts, ui, noCache, accel, displayType); err != nil {
+						return err
 					}
+				default:
+					// PE mode: build boot volume only (no VM install).
+					arch := "arm64"
 					gosshdExe := filepath.Join(workDir, "gosshd.exe")
 					logger.Info("cross-compiling gosshd", "target", "windows/"+arch)
 					if err := winpe.CrossCompileGosshd(gosshdExe, arch); err != nil {
@@ -178,7 +227,7 @@ func newBuildCmd() *cobra.Command {
 						return err
 					}
 
-					logger.Info("building image", "stage", stage)
+					logger.Info("building PE boot volume", "stage", stage)
 					logger.Debug("image sources", "windows", winISO, "virtio", virtioISO)
 					baseCfg := winpe.BaseImageConfig{
 						WindowsISO: winISO,
@@ -214,22 +263,71 @@ func newBuildCmd() *cobra.Command {
 			if info != nil {
 				sz = float64(info.Size()) / (1024 * 1024)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s (%.0f MB) — boot with: winkit run %s\n", dest, sz, dest)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s (%.0f MB) -- boot with: winkit start %s\n", dest, sz, dest)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&stage, "stage", "base", "image stage: core, base (default), or wsl (wsl.exe ready, nix distro imported; WINKIT_WSL2=true adds the hypervisor stack)")
+	cmd.Flags().StringVarP(&configFile, "file", "f", "", "config file path (default: ./winkit.yaml or ./winkit.yml)")
+	cmd.Flags().BoolVar(&peFlag, "pe", false, "WinPE boot volume mode (~4GB, ephemeral)")
+	cmd.Flags().BoolVar(&wslFlag, "wsl", false, "enable WSL in the built image")
+	cmd.Flags().StringVar(&wslImage, "wsl-image", "", "WSL distro image (alpine, ubuntu, or path to .wsl tarball)")
+	cmd.Flags().StringVar(&fromFlag, "from", "", "media source: windows/<edition>-<arch>, ./path.iso, or ./path.wim (default: windows/11-pro-arm64)")
 	cmd.Flags().StringVar(&imageTypeFlag, "image-type", "qcow2", "output image format (qcow2, utm)")
-	cmd.Flags().StringVar(&nixHome, "nixhome", "", "home-manager flake for the nix distro: a local directory or a flake ref (github:owner/repo, git+https://…); default: embedded flake, env: WINKIT_NIXHOME")
-	cmd.Flags().StringVar(&accel, "accel", "", "QEMU accelerator: hvf, kvm, or tcg (build defaults to best available; wsl continue/verify defaults to tcg)")
-	addMediaSpecFlags(cmd, &spec)
+	cmd.Flags().StringVar(&accel, "accel", "", "QEMU accelerator: hvf, kvm, or tcg")
+	cmd.Flags().IntVar(&vncDisplay, "vnc", -1, "start a VNC server on display :N (port 5900+N) to watch the install")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "redownload the cached ISOs before building")
 	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "cache directory (default: "+cache.DirEnv+", else user cache dir + /winkit)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing image without asking")
 	cmd.Flags().BoolVar(&noHypervisor, "no-hypervisor", false,
-		"core/base only: transplant VMP but leave the hypervisor disabled "+
-			"(no hypervisorlaunchtype, no first-boot hook) — the control image")
+		"transplant VMP but leave the hypervisor disabled "+
+			"(no hypervisorlaunchtype, no first-boot hook)")
 	return cmd
+}
+
+// loadBuildConfig loads config from the given path, or discovers winkit.yaml/yml
+// in the current directory. Returns defaults if no config file exists.
+// The second return value is the resolved path (empty when using defaults).
+func loadBuildConfig(path string) (*config.Config, string, error) {
+	if path != "" {
+		cfg, err := config.Load(path)
+		if err != nil {
+			return nil, "", err
+		}
+		return cfg, path, nil
+	}
+
+	discovered, err := config.Discover(".")
+	if err != nil {
+		return &config.Config{}, "", nil
+	}
+	cfg, err := config.Load(discovered)
+	if err != nil {
+		return nil, "", err
+	}
+	return cfg, discovered, nil
+}
+
+// specFromFrom converts a BuildOpts.From string to a uupdump.MediaSpec for
+// the fetch pipeline. Local ISO/WIM paths are not supported by the fetch
+// pipeline yet; this returns an error for them.
+func specFromFrom(from string) (uupdump.MediaSpec, error) {
+	kind := buildopts.DetectFrom(from)
+	switch kind {
+	case buildopts.FromISO, buildopts.FromWIM:
+		return uupdump.MediaSpec{}, fmt.Errorf("local media sources (%s) are not yet supported in the build pipeline", from)
+	}
+	// Parse "windows/11-pro-arm64" format.
+	spec := uupdump.MediaSpec{
+		OS:   "windows",
+		Arch: "arm64",
+	}
+	parts := strings.SplitN(from, "/", 2)
+	if len(parts) == 2 {
+		spec.OS = parts[0]
+		// The descriptor after / is informational for now; the fetch
+		// pipeline uses its own defaults. Future: parse edition/arch.
+	}
+	return spec, nil
 }
 
 // ensureCachedISOs returns the cached Windows and virtio-win ISO paths,

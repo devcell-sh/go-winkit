@@ -53,6 +53,7 @@ func NewRootCmd() *cobra.Command {
 		"trace every IO operation to stderr as JSONL")
 
 	root.AddCommand(
+		newInitCmd(),
 		newBuildCmd(),
 		newFetchCmd(),
 		newISOCmd(),
@@ -61,6 +62,9 @@ func NewRootCmd() *cobra.Command {
 		newWimCmd(),
 		newListFeaturesCmd(),
 		newDiagCmd(),
+		newStartCmd(),
+		newStopCmd(),
+		newStatusCmd(),
 	)
 	return root
 }

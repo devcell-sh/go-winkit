@@ -176,7 +176,7 @@ func resolveWSLBackend() (winpe.VMBackend, string, error) {
 // engages requires booting it on a TCG secure/EL3 machine (see CELL-495),
 // which this build does not do: it uses the fastest available accelerator
 // (HVF on Mac, KVM on Linux) for the install.
-func buildWSLImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, ui *runUI, noCache bool, accel, nixHome string) error {
+func buildWSLImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, ui *runUI, noCache bool, accel, nixHome, displayType string) error {
 	// --accel flag wins; then WINKIT_E2E_ACCEL env; then the best available
 	// accelerator for the host (HVF on Mac, KVM on Linux, TCG fallback).
 	// The install does not need secure/EL3: features are staged with
@@ -377,6 +377,7 @@ func buildWSLImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workD
 			StructuredLogPath: buildJSONL,
 			BootVolume:        bootVolume,
 			Secure:            secure,
+			DisplayType:       displayType,
 		}
 	case "vz":
 		installCfg.BackendExtra = vzInstallExtra(vzVNCPort(), logger, bootVolume)
@@ -476,6 +477,18 @@ func buildWSLImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workD
 		_ = qemu.QMPQuit(qmpSock)
 	}
 	time.Sleep(5 * time.Second)
+
+	// Persist vars.fd next to the disk so `winkit start` can find it.
+	if !strings.HasPrefix(accel, "tcg") {
+		srcVars := filepath.Join(installOut, "vars.fd")
+		if _, err := os.Stat(srcVars); err == nil {
+			dstVars := siblingVarsPath(dest)
+			if copyErr := copyFile(srcVars, dstVars); copyErr == nil {
+				logger.Info("saved NVRAM vars for reboot", "path", dstVars)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -878,9 +891,17 @@ func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string
 	return nil
 }
 
+// siblingVarsPath returns the canonical path for a vars.fd file next to a disk
+// image: "<dir>/<stem>-vars.fd".
+func siblingVarsPath(diskPath string) string {
+	dir := filepath.Dir(diskPath)
+	stem := strings.TrimSuffix(filepath.Base(diskPath), filepath.Ext(diskPath))
+	return filepath.Join(dir, stem+"-vars.fd")
+}
+
 // findSiblingVars looks for the NVRAM vars store next to a base disk: first
-// "<base without ext>-vars.fd", then "vars.fd" in the same directory. Returns
-// "" if neither exists.
+// "<base without ext>-vars.fd", then "vars.fd" in the same directory, then
+// inside a .winkit-run/<stem>/ output directory. Returns "" if none exists.
 func findSiblingVars(baseDisk string) string {
 	dir := filepath.Dir(baseDisk)
 	stem := strings.TrimSuffix(filepath.Base(baseDisk), filepath.Ext(baseDisk))
@@ -888,6 +909,7 @@ func findSiblingVars(baseDisk string) string {
 		filepath.Join(dir, stem+"-vars.fd"),
 		filepath.Join(dir, "vars.fd"),
 		filepath.Join(dir, "wsl-installed-vars.fd"),
+		filepath.Join(dir, ".winkit-run", stem, "vars.fd"),
 	} {
 		if _, err := os.Stat(cand); err == nil {
 			return cand

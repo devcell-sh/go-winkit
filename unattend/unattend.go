@@ -188,7 +188,17 @@ type Config struct {
 	// CustomSteps are caller-supplied PowerShell steps appended to the
 	// bootstrap after all built-in steps and before guest diagnostics.
 	// Each runs inside Invoke-Step: exceptions are caught and logged.
+	//
+	// Deprecated: use Hooks with Phase=Boot instead. Will be removed
+	// when all callers migrate to the hook system.
 	CustomSteps []CustomStep
+
+	// Features lists Windows features to enable during specialize (via
+	// DISM /enable-feature). This is the hook-system replacement for
+	// individual booleans like EnableWSL1Feature. Known features:
+	//   "Microsoft-Windows-Subsystem-Linux" — WSL1 lxcore.sys
+	//   "RemoteDesktop" — enables RDP + disables firewall
+	Features []string
 	// DisableServices overrides the default list of services to disable in
 	// specialize. When nil, DefaultQuietServices() is used. When non-nil
 	// (even if empty), exactly those services are disabled. Filter
@@ -466,6 +476,81 @@ func (c Config) specializeQuietServicesEnd() int {
 // the WSL1 optional feature (see EnableWSL1Feature).
 func (c Config) SpecializeWSL1FeatureOrder() int { return c.specializeQuietServicesEnd() }
 
+// HasFeature reports whether a feature is enabled, checking both the
+// Features list and legacy boolean fields.
+func (c Config) HasFeature(name string) bool {
+	for _, f := range c.Features {
+		if strings.EqualFold(f, name) {
+			return true
+		}
+	}
+	switch strings.ToLower(name) {
+	case "microsoft-windows-subsystem-linux":
+		return c.EnableWSL1Feature
+	case "remotedesktop":
+		return c.EnableRDP
+	}
+	return false
+}
+
+// EffectiveRDP reports whether RDP should be enabled, checking both the
+// legacy EnableRDP boolean and the Features list.
+func (c Config) EffectiveRDP() bool {
+	return c.EnableRDP || c.HasFeature("RemoteDesktop")
+}
+
+// EffectiveWSL1Feature reports whether the WSL1 feature should be enabled,
+// checking both the legacy boolean and the Features list.
+func (c Config) EffectiveWSL1Feature() bool {
+	return c.EnableWSL1Feature || c.HasFeature("Microsoft-Windows-Subsystem-Linux")
+}
+
+// DISMFeatures returns the list of DISM features to enable in specialize,
+// merging the Features list with legacy booleans. Each feature gets its own
+// specialize RunSynchronousCommand. Known features that map to legacy
+// booleans are deduplicated.
+func (c Config) DISMFeatures() []string {
+	seen := map[string]bool{}
+	var features []string
+
+	if c.EffectiveWSL1Feature() {
+		f := "Microsoft-Windows-Subsystem-Linux"
+		seen[strings.ToLower(f)] = true
+		features = append(features, f)
+	}
+
+	for _, f := range c.Features {
+		lower := strings.ToLower(f)
+		if lower == "remotedesktop" {
+			continue
+		}
+		if seen[lower] {
+			continue
+		}
+		seen[lower] = true
+		features = append(features, f)
+	}
+	return features
+}
+
+// SpecializeDISMFeaturesBase returns the first <Order> for DISM feature
+// enable commands in specialize.
+func (c Config) SpecializeDISMFeaturesBase() int {
+	return c.specializeQuietServicesEnd()
+}
+
+// SpecializeDISMFeaturesOrders returns the <Order> values for each DISM
+// feature enable command.
+func (c Config) SpecializeDISMFeaturesOrders() []int {
+	features := c.DISMFeatures()
+	base := c.SpecializeDISMFeaturesBase()
+	orders := make([]int, len(features))
+	for i := range features {
+		orders[i] = base + i
+	}
+	return orders
+}
+
 // GosshdListenAddrOrDefault is the address the specialize task launches gosshd
 // on, falling back to DefaultGosshdListenAddr.
 func (c Config) GosshdListenAddrOrDefault() string {
@@ -718,7 +803,7 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
           <Path>reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path>
           <Description>Allow local account setup without network</Description>
         </RunSynchronousCommand>
-{{- if .EnableRDP}}
+{{- if .EffectiveRDP}}
         <RunSynchronousCommand wcm:action="add">
           <Order>2</Order>
           <Path>netsh advfirewall set allprofiles state off</Path>
@@ -832,18 +917,11 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
           <Path>reg add HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection /v AllowTelemetry /t REG_DWORD /d 0 /f</Path>
           <Description>Telemetry policy: disable diagnostic data collection</Description>
         </RunSynchronousCommand>
-{{- if .EnableWSL1Feature}}
-
-        <!-- WSL1 needs the Microsoft-Windows-Subsystem-Linux optional feature
-             (lxcore.sys); without it the version-1 wsl import exits -1. /norestart
-             defers the driver load to the reboot into OOBE, so the feature is
-             live before the first-logon bootstrap imports nix.wsl. Wrapped in
-             exit /b 0: dism returns 3010 (restart required), which would
-             otherwise abort Setup. -->
+{{- range $i, $feat := .DISMFeatures}}
         <RunSynchronousCommand wcm:action="add">
-          <Order>{{.SpecializeWSL1FeatureOrder}}</Order>
-          <Path>cmd /c "dism /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart &amp; exit /b 0"</Path>
-          <Description>Enable the WSL1 optional feature</Description>
+          <Order>{{index $.SpecializeDISMFeaturesOrders $i}}</Order>
+          <Path>cmd /c "dism /online /enable-feature /featurename:{{$feat}} /all /norestart &amp; exit /b 0"</Path>
+          <Description>Enable the {{$feat}} optional feature</Description>
         </RunSynchronousCommand>
 {{- end}}
       </RunSynchronous>
@@ -851,7 +929,7 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
         <Extend>true</Extend>
       </ExtendOSPartition>
     </component>
-{{- if .EnableRDP}}
+{{- if .EffectiveRDP}}
 
     <component name="Microsoft-Windows-TerminalServices-LocalSessionManager"
                processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35"

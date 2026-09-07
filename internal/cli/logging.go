@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -39,9 +41,10 @@ func newLogger(w io.Writer, debug bool) *slog.Logger {
 type runUI struct {
 	Logger *slog.Logger
 
-	w    io.Writer
-	prog *tea.Program
-	done chan struct{}
+	w       io.Writer
+	logFile *os.File
+	prog    *tea.Program
+	done    chan struct{}
 }
 
 func newRunUI(cmd *cobra.Command) *runUI {
@@ -105,9 +108,32 @@ func (u *runUI) ItemDone(name string) {
 	}
 }
 
+// AttachLogFile opens a structured JSONL log file at path. All slog
+// output is tee'd to the file using the same GuestEvent schema that
+// build.jsonl uses, so one parser (winpe.ParseGuestEvents) reads both
+// host and guest logs.
+func (u *runUI) AttachLogFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	u.logFile = f
+	u.Logger = slog.New(multiHandler{handlers: []slog.Handler{
+		u.Logger.Handler(),
+		newGuestEventHandler(f),
+	}})
+	return nil
+}
+
 // Finish settles the checklist (marking the in-flight step) and waits
 // for the terminal to be released. Call it before printing results.
 func (u *runUI) Finish(err error) {
+	if u.logFile != nil {
+		u.logFile.Close()
+	}
 	if u.prog == nil {
 		if u.w != io.Discard {
 			fmt.Fprintln(u.w)
@@ -116,4 +142,44 @@ func (u *runUI) Finish(err error) {
 	}
 	u.prog.Send(finishMsg{failed: err != nil})
 	<-u.done
+}
+
+// multiHandler fans slog records out to multiple handlers so one
+// Logger can write to both a display and a structured log file.
+type multiHandler struct {
+	handlers []slog.Handler
+}
+
+func (m multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, r.Level) {
+			_ = h.Handle(ctx, r)
+		}
+	}
+	return nil
+}
+
+func (m multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	hs := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		hs[i] = h.WithAttrs(attrs)
+	}
+	return multiHandler{handlers: hs}
+}
+
+func (m multiHandler) WithGroup(name string) slog.Handler {
+	hs := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		hs[i] = h.WithGroup(name)
+	}
+	return multiHandler{handlers: hs}
 }
