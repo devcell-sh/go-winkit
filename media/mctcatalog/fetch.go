@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/devcell-sh/go-winkit/cache"
-	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/media/isokit"
 )
 
 type FetchConfig struct {

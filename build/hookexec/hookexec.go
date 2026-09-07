@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/devcell-sh/go-winkit/buildopts"
+	"github.com/devcell-sh/go-winkit/build/buildopts"
 )
 
 func hookTimeout(h buildopts.Hook) time.Duration {

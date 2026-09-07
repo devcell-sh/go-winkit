@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devcell-sh/go-winkit/buildopts"
+	"github.com/devcell-sh/go-winkit/build/buildopts"
 )
 
 type mockRunner struct {
-	calls    []string
-	results  []mockResult
-	callIdx  int
+	calls   []string
+	results []mockResult
+	callIdx int
 }
 
 type mockResult struct {

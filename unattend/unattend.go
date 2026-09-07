@@ -9,21 +9,21 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/media/isokit"
 	"github.com/devcell-sh/go-winkit/winpe"
 	"github.com/devcell-sh/go-winkit/wsl"
 )
 
 // Config holds parameters for generating an autounattend.xml file.
 type Config struct {
-	Username      string
-	Password      string
-	Locale        string
-	Hostname      string
+	Username string
+	Password string
+	Locale   string
+	Hostname string
 	// DistroName is the WSL1 distro name used for import and all wsl.exe -d
 	// invocations. Defaults to "winkit". The bootstrap template, verify
 	// functions, and PS1 prompt all derive from this.
-	DistroName string
+	DistroName    string
 	VirtIODrivers []VirtIODriver
 	SSHPubKey     string
 	TimeZone      string
@@ -587,13 +587,13 @@ func SessionUsername() string {
 // DefaultConfig returns sensible defaults for a winkit Windows VM.
 func DefaultConfig() Config {
 	return Config{
-		Username:  SessionUsername(),
-		Password:  "rdp",
-		Locale:    "en-US",
+		Username:   SessionUsername(),
+		Password:   "rdp",
+		Locale:     "en-US",
 		Hostname:   "winkit",
 		DistroName: "winkit",
-		TimeZone:  "UTC",
-		ImageName: "Windows 11 Pro",
+		TimeZone:   "UTC",
+		ImageName:  "Windows 11 Pro",
 		// No driver injection: the VM uses NVMe for disk and a USB CD-ROM for
 		// media, both covered by inbox Windows ARM64 drivers (CELL-359).
 		// Callers wanting virtio devices must supply VirtIODrivers explicitly.

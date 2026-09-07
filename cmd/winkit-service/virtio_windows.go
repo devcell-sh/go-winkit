@@ -23,9 +23,9 @@ func openVirtioPort(path string) io.WriteCloser {
 		return nil
 	}
 	const (
-		genericWrite    = 0x40000000
-		fileShareRW     = 0x3
-		openExisting    = 3
+		genericWrite = 0x40000000
+		fileShareRW  = 0x3
+		openExisting = 3
 	)
 	h, _, _ := createFile.Call(
 		uintptr(unsafe.Pointer(pathPtr)),

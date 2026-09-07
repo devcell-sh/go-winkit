@@ -139,7 +139,6 @@ RUN nix-shell -p gcc --run 'gcc -shared -fPIC -o /usr/lib/ofd-shim.so /tmp/ofd-s
 RUN printf 'export LD_PRELOAD=/usr/lib/ofd-shim.so\n' > /etc/profile.d/ofd-shim.sh \
  && chmod +x /etc/profile.d/ofd-shim.sh
 
-# TODO: move s6 service dirs to wsl/s6/ as templates, COPY into image.
 # --- In-distro sshd via s6: WSL1 starts the user shell without a PTY
 # (Windows OpenSSH hands WSL pipes), so tab completion and readline are
 # broken. An in-distro sshd on port 2223 gives real PTY sessions.
@@ -160,11 +159,11 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 HostKey /etc/ssh/ssh_host_rsa_key
 SSHD
 
-# s6 service directory for sshd.
-RUN mkdir -p /etc/s6/services/sshd \
- && printf '#!/bin/sh\nexec sshd -D -e -f /etc/ssh/sshd_config 2>&1\n' \
-      > /etc/s6/services/sshd/run \
- && chmod +x /etc/s6/services/sshd/run
+# --- s6 service dirs: COPY'd from the build context (wsl.Recipe services
+# land under s6/<name>/; sshd is always seeded). Context files arrive
+# 0644, so run/finish get their executable bit restored here. ---
+COPY s6/ /etc/s6/services/
+RUN find /etc/s6/services -type f \( -name run -o -name finish \) -exec chmod +x {} +
 
 # --- Fix sudo: nix cannot install setuid binaries (store is user-owned).
 # Copy the real binary to /usr/bin with the setuid bit so "sudo" works. ---

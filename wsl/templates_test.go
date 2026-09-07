@@ -20,6 +20,9 @@ func TestTemplatesCarryWSLEssentials(t *testing.T) {
 		"sshd",
 		"s6-svscan",
 		"sudo",
+		// Service dirs come from the build context (Recipe.AddService /
+		// the embedded sshd catalog), never inline printf.
+		"COPY s6/ /etc/s6/services/",
 	}
 	cases := []struct {
 		name    string
@@ -38,13 +41,15 @@ func TestTemplatesCarryWSLEssentials(t *testing.T) {
 				"ARG NIXHOME_REF",
 				"homeConfigurations.${WSL_USER}.activationPackage",
 			},
+			forbids: []string{"mkdir -p /etc/s6/services/sshd"},
 		},
 		{
 			name:   "base-alpine",
 			render: func() (string, error) { return renderDockerfile("Dockerfile.base.tmpl", "alpine") },
 			extras: []string{"FROM alpine", "login-shell", "/bin/s6-init", "apk add"},
-			// The default image must not drag the nix stack in.
-			forbids: []string{"nix"},
+			// The default image must not drag the nix stack in, and no
+			// template may recreate service dirs inline.
+			forbids: []string{"nix", "mkdir -p /etc/s6/services/sshd"},
 		},
 		{
 			name:   "base-ubuntu",

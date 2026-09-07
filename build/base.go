@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devcell-sh/go-winkit/buildopts"
+	"github.com/devcell-sh/go-winkit/build/buildopts"
+	"github.com/devcell-sh/go-winkit/build/hookexec"
 	"github.com/devcell-sh/go-winkit/gosshd"
-	"github.com/devcell-sh/go-winkit/hookexec"
-	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/media/isokit"
 	"github.com/devcell-sh/go-winkit/unattend"
 	"github.com/devcell-sh/go-winkit/vm"
 	"github.com/devcell-sh/go-winkit/vm/qemu"

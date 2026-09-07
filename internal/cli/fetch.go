@@ -7,9 +7,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/devcell-sh/go-winkit/cache"
-	"github.com/devcell-sh/go-winkit/mctcatalog"
-	"github.com/devcell-sh/go-winkit/uupdump"
-	"github.com/devcell-sh/go-winkit/virtio"
+	"github.com/devcell-sh/go-winkit/media/mctcatalog"
+	"github.com/devcell-sh/go-winkit/media/uupdump"
+	"github.com/devcell-sh/go-winkit/media/virtio"
 )
 
 func newFetchCmd() *cobra.Command {

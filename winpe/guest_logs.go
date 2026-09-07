@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/media/isokit"
 )
 
 // GuestLog is one file the guest wrote to the answer volume, or the reason it

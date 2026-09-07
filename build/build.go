@@ -12,7 +12,8 @@ import (
 	"os"
 
 	"github.com/devcell-sh/go-wimlib"
-	"github.com/devcell-sh/go-winkit/buildopts"
+	"github.com/devcell-sh/go-winkit/build/buildopts"
+	"github.com/devcell-sh/go-winkit/s6"
 )
 
 // wimlibAvailable is a seam for tests; the binding's answer is fixed at
@@ -47,6 +48,11 @@ type Config struct {
 	WSLImage string
 	// NixHome selects the home-manager config for WSLImage=nix.
 	NixHome string
+	// WSLServices are extra s6 services baked into the distro rootfs and
+	// supervised by the boot-time s6-svscan loop. Docker-built WSLImage
+	// values only (a docker ref or nix); URL/tarball images fail the
+	// build. A service named like a built-in (sshd) overrides it.
+	WSLServices []s6.Service
 
 	// Opts carries features/hooks for base installs (see buildopts).
 	Opts *buildopts.BuildOpts
@@ -63,7 +69,7 @@ func (c Config) logger() *slog.Logger {
 // imported, verifying SSH/RDP, the imported distro, and the SFTP share.
 func WSL(ctx context.Context, c Config) error {
 	return wslImage(ctx, c.Dest, c.CacheDir, c.WindowsISO, c.VirtIOISO, c.WorkDir,
-		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.DisplayType)
+		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.WSLServices, c.DisplayType)
 }
 
 // Base performs a full unattended install running the hooks and features

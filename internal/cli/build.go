@@ -12,13 +12,14 @@ import (
 
 	"github.com/devcell-sh/go-wimlib"
 	"github.com/devcell-sh/go-winkit/build"
-	"github.com/devcell-sh/go-winkit/buildopts"
+	"github.com/devcell-sh/go-winkit/build/buildopts"
+	"github.com/devcell-sh/go-winkit/build/imageformat"
 	"github.com/devcell-sh/go-winkit/cache"
-	"github.com/devcell-sh/go-winkit/config"
-	"github.com/devcell-sh/go-winkit/imageformat"
-	"github.com/devcell-sh/go-winkit/mctcatalog"
-	"github.com/devcell-sh/go-winkit/uupdump"
-	"github.com/devcell-sh/go-winkit/virtio"
+	"github.com/devcell-sh/go-winkit/internal/config"
+	"github.com/devcell-sh/go-winkit/media/mctcatalog"
+	"github.com/devcell-sh/go-winkit/media/uupdump"
+	"github.com/devcell-sh/go-winkit/media/virtio"
+	"github.com/devcell-sh/go-winkit/s6"
 	"github.com/devcell-sh/go-winkit/vm/qemu"
 	"github.com/devcell-sh/go-winkit/winpe"
 )
@@ -118,7 +119,13 @@ func newBuildCmd() *cobra.Command {
 					if image == "" {
 						image = "alpine"
 					}
-					cfg.WSL = &config.WSLConfig{Image: image}
+					// Override the image only; a yaml-declared services
+					// dir survives the flag.
+					services := ""
+					if cfg.WSL != nil {
+						services = cfg.WSL.Services
+					}
+					cfg.WSL = &config.WSLConfig{Image: image, Services: services}
 				} else {
 					cfg.WSL = nil
 				}
@@ -246,6 +253,13 @@ func newBuildCmd() *cobra.Command {
 				}
 				if opts.WSL != nil {
 					buildCfg.WSLImage = opts.WSL.Image
+					if opts.WSL.ServicesDir != "" {
+						svcs, err := s6.LoadDir(opts.WSL.ServicesDir)
+						if err != nil {
+							return fmt.Errorf("wsl services %s: %w", opts.WSL.ServicesDir, err)
+						}
+						buildCfg.WSLServices = svcs
+					}
 				}
 
 				switch stage {

@@ -10,13 +10,13 @@ require (
 	github.com/devcell-sh/go-wimlib v0.1.0
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/gliderlabs/ssh v0.3.8
+	github.com/kardianos/service v1.3.0
 	github.com/mattn/go-isatty v0.0.24
 	github.com/pkg/sftp v1.13.11
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tmc/apple v0.6.18
 	golang.org/x/crypto v0.54.0
-	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.47.0
 )
 
@@ -33,7 +33,6 @@ require (
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/kardianos/service v1.3.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
@@ -62,5 +61,5 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1
 )

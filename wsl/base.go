@@ -13,12 +13,18 @@ func BaseRecipe(baseImage, user, distroName string) (Recipe, error) {
 	if err != nil {
 		return Recipe{}, err
 	}
-	return Recipe{
+	r := Recipe{
 		Image:          imageSlug(baseImage),
 		User:           user,
 		DistroName:     distroName,
 		Dockerfile:     df,
 		VerifyCommand:  "uname -a",
 		VerifyContains: "Linux",
-	}, nil
+	}
+	// The template COPYs s6/ into /etc/s6/services unconditionally, so the
+	// context must always carry at least the sshd built-in.
+	if err := r.AddService(SSHDBaseService()); err != nil {
+		return Recipe{}, err
+	}
+	return r, nil
 }

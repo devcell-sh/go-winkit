@@ -59,6 +59,11 @@ func (h *Hook) applyDefaults() {
 
 type WSLConfig struct {
 	Image string
+	// ServicesDir is a directory laid out like an s6 scan dir (each
+	// subdirectory one service: run, optional finish, data files), baked
+	// into /etc/s6/services of the distro rootfs. Path only — the CLI
+	// loads it; buildopts does no file I/O.
+	ServicesDir string
 }
 
 type BuildOpts struct {
@@ -108,7 +113,7 @@ func (o *BuildOpts) SortHooks() {
 type FromKind int
 
 const (
-	FromMCT   FromKind = iota
+	FromMCT FromKind = iota
 	FromISO
 	FromWIM
 )
