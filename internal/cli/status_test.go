@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devcell-sh/go-winkit/vmstate"
+	"github.com/devcell-sh/go-winkit/vm/vmstate"
 )
 
 func TestStatusCmd_NoVMs(t *testing.T) {

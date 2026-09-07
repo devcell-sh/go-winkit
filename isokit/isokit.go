@@ -19,7 +19,7 @@ import (
 	"github.com/diskfs/go-diskfs/filesystem/iso9660"
 	"github.com/diskfs/go-diskfs/partition/gpt"
 
-	"github.com/devcell-sh/go-winkit/iotrace"
+	"github.com/devcell-sh/go-winkit/internal/iotrace"
 )
 
 // traceFileSize reports a path's size for tracing, or 0 when it cannot be

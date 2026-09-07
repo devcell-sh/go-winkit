@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/devcell-sh/go-wimlib"
-	"github.com/devcell-sh/go-winkit/iotrace"
+	"github.com/devcell-sh/go-winkit/internal/iotrace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

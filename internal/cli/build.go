@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/devcell-sh/go-wimlib"
+	"github.com/devcell-sh/go-winkit/build"
 	"github.com/devcell-sh/go-winkit/buildopts"
 	"github.com/devcell-sh/go-winkit/cache"
 	"github.com/devcell-sh/go-winkit/config"
@@ -17,8 +19,8 @@ import (
 	"github.com/devcell-sh/go-winkit/mctcatalog"
 	"github.com/devcell-sh/go-winkit/uupdump"
 	"github.com/devcell-sh/go-winkit/virtio"
+	"github.com/devcell-sh/go-winkit/vm/qemu"
 	"github.com/devcell-sh/go-winkit/winpe"
-	"github.com/devcell-sh/go-winkit/winpe/qemu"
 )
 
 // qcow2 capacity for the base image: the boot payload is ~700MB and the
@@ -169,10 +171,16 @@ func newBuildCmd() *cobra.Command {
 				cacheDir = cache.Dir()
 			}
 
-			hostLog := filepath.Join(filepath.Dir(dest), "host.jsonl")
-			if err := ui.AttachLogFile(hostLog); err != nil {
+			// Debug artifacts follow the test/results/<ts>-<name> convention:
+			// .winkit/debug/<ts>-build/ holds the structured host log always,
+			// plus periodic VM screenshots under --debug.
+			debug, _ := cmd.Flags().GetBool("debug")
+			debugDir := filepath.Join(".winkit", "debug",
+				time.Now().UTC().Format("20060102T150405")+"-build")
+			if err := ui.AttachLogFile(filepath.Join(debugDir, "host.jsonl")); err != nil {
 				return err
 			}
+			ui.Logger.Debug("debug artifacts", "dir", debugDir)
 
 			// Resolve media spec from BuildOpts.From for the fetch pipeline.
 			spec, err := specFromFrom(opts.From)
@@ -202,13 +210,51 @@ func newBuildCmd() *cobra.Command {
 					qcow2Dest = filepath.Join(workDir, "disk.qcow2")
 				}
 
+				// --debug: periodic VM screenshots into the debug dir, like
+				// the e2e harness. The QMP socket path is deterministic; on
+				// non-qemu backends it never appears and the capturer idles.
+				stopShots := make(chan struct{})
+				shotsDone := make(chan struct{})
+				if debug && stage != "pe" {
+					shotDir := filepath.Join(debugDir, "screenshots")
+					if err := os.MkdirAll(shotDir, 0o755); err != nil {
+						return err
+					}
+					qmpSock := qemu.QMPSocketPath(qemu.Spec{
+						VMName: "winkit-install", QMPSocketDir: filepath.Join(workDir, "install")})
+					go qemu.CaptureScreenshots(qmpSock, shotDir, stopShots, shotsDone, func(f string, a ...any) {
+						logger.Debug(fmt.Sprintf(f, a...))
+					})
+					logger.Info("saving VM screenshots", "dir", shotDir)
+				} else {
+					close(shotsDone)
+				}
+				defer func() { close(stopShots); <-shotsDone }()
+
+				buildCfg := build.Config{
+					Dest:        qcow2Dest,
+					CacheDir:    cacheDir,
+					WindowsISO:  winISO,
+					VirtIOISO:   virtioISO,
+					WorkDir:     workDir,
+					Logger:      ui.Logger,
+					NoCache:     noCache,
+					Accel:       accel,
+					DisplayType: displayType,
+					NixHome:     build.ResolveNixHome(""),
+					Opts:        opts,
+				}
+				if opts.WSL != nil {
+					buildCfg.WSLImage = opts.WSL.Image
+				}
+
 				switch stage {
 				case "wsl":
-					if err := buildWSLImage(cmd.Context(), qcow2Dest, cacheDir, winISO, virtioISO, workDir, ui, noCache, accel, resolveNixHome(""), displayType); err != nil {
+					if err := build.WSL(cmd.Context(), buildCfg); err != nil {
 						return err
 					}
 				case "base":
-					if err := buildBaseInstallImage(cmd.Context(), qcow2Dest, cacheDir, winISO, virtioISO, workDir, opts, ui, noCache, accel, displayType); err != nil {
+					if err := build.Base(cmd.Context(), buildCfg); err != nil {
 						return err
 					}
 				default:
@@ -245,6 +291,19 @@ func newBuildCmd() *cobra.Command {
 
 					if err := qemu.CreateFATQcow2(qcow2Dest, files, baseImageCapacity); err != nil {
 						return err
+					}
+				}
+
+				// Sanity: a real install writes many GB; anything near the
+				// empty-qcow2 floor means the OS never landed even though
+				// the build returned cleanly (same assertion as the e2e test).
+				if stage != "pe" && os.Getenv("WINKIT_E2E_DISK") == "" {
+					const minInstalledBytes = 4 * 1024 * 1024 * 1024
+					if fi, err := os.Stat(qcow2Dest); err != nil {
+						return fmt.Errorf("produced disk missing: %w", err)
+					} else if fi.Size() < minInstalledBytes {
+						return fmt.Errorf("produced disk too small (%.1f GB at %s) — install likely did not complete",
+							float64(fi.Size())/(1<<30), qcow2Dest)
 					}
 				}
 

@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/devcell-sh/go-winkit/diag"
+	"github.com/devcell-sh/go-winkit/internal/diag"
 	"github.com/devcell-sh/go-winkit/unattend"
 )
 

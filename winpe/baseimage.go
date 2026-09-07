@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/devcell-sh/go-winkit/wim"
 )
 
 // GosshdShellCmdName is the cmd.exe shell script that boots the base image
@@ -135,7 +133,7 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 	}
 
 	bootWimPath := filepath.Join(stageDir, "sources", "boot.wim")
-	if err := wim.InjectWinPEPayload(bootWimPath, injectDir); err != nil {
+	if err := InjectWinPEPayload(bootWimPath, injectDir); err != nil {
 		return nil, fmt.Errorf("injecting WinPE payload: %w", err)
 	}
 

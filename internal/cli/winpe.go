@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/devcell-sh/go-winkit/isokit"
-	"github.com/devcell-sh/go-winkit/wim"
 	"github.com/devcell-sh/go-winkit/winpe"
 )
 
@@ -133,13 +132,13 @@ func newWinPEBuildCmd() *cobra.Command {
 				}
 			}
 
-			var patches []wim.RegistryPatch
+			var patches []winpe.RegistryPatch
 			if hyperv {
-				patches = append(patches, wim.HyperVBootPatches())
+				patches = append(patches, winpe.HyperVBootPatches())
 			}
 			bootWim := filepath.Join(stageDir, "sources", "boot.wim")
 			fmt.Fprintf(cmd.ErrOrStderr(), "injecting payload into %s\n", bootWim)
-			if err := wim.InjectWinPEPayload(bootWim, payloadDir, patches...); err != nil {
+			if err := winpe.InjectWinPEPayload(bootWim, payloadDir, patches...); err != nil {
 				return err
 			}
 

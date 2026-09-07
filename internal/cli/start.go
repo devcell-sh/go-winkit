@@ -12,11 +12,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/devcell-sh/go-winkit/build"
 	"github.com/devcell-sh/go-winkit/gosshd"
 	"github.com/devcell-sh/go-winkit/unattend"
-	"github.com/devcell-sh/go-winkit/vmstate"
+	"github.com/devcell-sh/go-winkit/vm"
+	"github.com/devcell-sh/go-winkit/vm/qemu"
+	"github.com/devcell-sh/go-winkit/vm/vmstate"
 	"github.com/devcell-sh/go-winkit/winpe"
-	"github.com/devcell-sh/go-winkit/winpe/qemu"
 )
 
 func newStartCmd() *cobra.Command {
@@ -106,12 +108,12 @@ func newStartCmd() *cobra.Command {
 			}
 			defer stop()
 
-			backend, backendName, err := resolveWSLBackend()
+			backend, backendName, err := build.ResolveBackend()
 			if err != nil {
 				return err
 			}
 
-			outDir := filepath.Join(filepath.Dir(absImage), ".winkit-run", name)
+			outDir := filepath.Join(filepath.Dir(absImage), ".winkit", "run", name)
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
 				return fmt.Errorf("creating output dir: %w", err)
 			}
@@ -121,12 +123,12 @@ func newStartCmd() *cobra.Command {
 				return fmt.Errorf("creating host log: %w", err)
 			}
 			defer hostLogFile.Close()
-			logger := slog.New(newGuestEventHandler(hostLogFile))
+			logger := slog.New(winpe.NewGuestEventHandler(hostLogFile))
 
 			secure := strings.HasPrefix(accel, "tcg")
 			var varsPath string
 			if !secure {
-				varsPath = findSiblingVars(absImage)
+				varsPath = build.FindSiblingVars(absImage)
 				if varsPath != "" {
 					dst := filepath.Join(outDir, "vars.fd")
 					if err := copyFile(varsPath, dst); err != nil {
@@ -145,7 +147,7 @@ func newStartCmd() *cobra.Command {
 				vncPort = 5900
 			}
 
-			runCfg := winpe.VMRunConfig{
+			runCfg := vm.VMRunConfig{
 				DiskPath:        absImage,
 				OutputDir:       outDir,
 				VMName:          "winkit-" + name,
@@ -176,17 +178,17 @@ func newStartCmd() *cobra.Command {
 				"image", absImage, "accel", accel, "backend", backendName,
 				"cpus", cpus, "memory_gb", memoryGB)
 
-			vm, err := backend.StartRun(ctx, runCfg)
+			machine, err := backend.StartRun(ctx, runCfg)
 			if err != nil {
 				return fmt.Errorf("starting VM: %w", err)
 			}
 
-			logger.Info("VM started", "pid", vm.PID(), "name", name)
+			logger.Info("VM started", "pid", machine.PID(), "name", name)
 
 			st := &vmstate.State{
 				Name:      name,
 				ImagePath: absImage,
-				PID:       vm.PID(),
+				PID:       machine.PID(),
 				Backend:   backendName,
 				StartedAt: time.Now(),
 				SSHPort:   sshPort,
@@ -196,11 +198,11 @@ func newStartCmd() *cobra.Command {
 				OutputDir: outDir,
 			}
 			if err := vmstate.Save(stateDir, st); err != nil {
-				vm.Stop()
+				machine.Stop()
 				return fmt.Errorf("saving state: %w", err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "VM %q started (PID %d)\n", name, vm.PID())
+			fmt.Fprintf(cmd.OutOrStdout(), "VM %q started (PID %d)\n", name, machine.PID())
 			fmt.Fprintf(cmd.OutOrStdout(), "  Image:  %s\n", absImage)
 			fmt.Fprintf(cmd.OutOrStdout(), "  SSH:    ssh -p %d %s@127.0.0.1\n", sshPort, gosshd.DefaultUser)
 			fmt.Fprintf(cmd.OutOrStdout(), "  RDP:    127.0.0.1:%d\n", rdpPort)
@@ -213,19 +215,19 @@ func newStartCmd() *cobra.Command {
 			if foreground {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nVM running in foreground. Press Ctrl+C to stop.\n")
 				select {
-				case <-vm.Done():
+				case <-machine.Done():
 					logger.Info("VM exited")
 					fmt.Fprintln(cmd.ErrOrStderr(), "VM exited")
 				case <-ctx.Done():
 					logger.Info("interrupt received, stopping VM")
 					fmt.Fprintln(cmd.ErrOrStderr(), "\nStopping VM...")
-					vm.Stop()
+					machine.Stop()
 
 					// Second Ctrl+C force-kills immediately.
 					forceCh := make(chan os.Signal, 1)
 					signal.Notify(forceCh, os.Interrupt)
 					done := make(chan struct{})
-					go func() { _ = vm.Wait(); close(done) }()
+					go func() { _ = machine.Wait(); close(done) }()
 					select {
 					case <-done:
 						logger.Info("VM stopped gracefully")

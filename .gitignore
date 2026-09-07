@@ -6,7 +6,7 @@
 *.dylib
 /winkit
 /dist/
-
+/bin/
 # Test artifacts
 *.test
 *.out
@@ -34,6 +34,11 @@ go.work.sum
 .devcell/
 .devcell.toml
 .rendered-ps1/
+
+# winkit runtime state (debug logs, VM run dirs, guest SFTP marker)
+.winkit/
+.winkit-run/
+build.jsonl
 
 # macOS metadata
 .DS_Store

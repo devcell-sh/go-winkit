@@ -3,7 +3,7 @@ package winpe
 import (
 	"strings"
 
-	"github.com/devcell-sh/go-winkit/templates"
+	"github.com/devcell-sh/go-winkit/internal/templates"
 )
 
 const (

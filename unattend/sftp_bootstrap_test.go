@@ -80,18 +80,18 @@ func TestGenerateBootstrapScript_SFTPFailureIsNonFatal(t *testing.T) {
 		"SFTP mount is not wrapped in Invoke-Step")
 }
 
-// The Nix WSL1 rootfs ships as nix.wsl (byte-exact gzip) so the bootstrap's
-// drive scan finds it on the answer volume and imports NixDev at first logon.
-func TestBuildAnswerVolume_ShipsNixWSLExact(t *testing.T) {
+// The WSL1 rootfs ships as distro.wsl (byte-exact gzip) so the bootstrap's
+// drive scan finds it on the answer volume and imports it at first logon.
+func TestBuildAnswerVolume_ShipsWSLExact(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.NixWSLPayloadData = []byte("\x1f\x8b fake gzip tarball")
+	cfg.WSLPayloadData = []byte("\x1f\x8b fake gzip tarball")
 	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
 	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
 
-	got, err := isokit.ReadFileFromFAT(imgPath, "/nix.wsl")
-	require.NoError(t, err, "nix.wsl must ship on the answer volume")
-	assert.Equal(t, string(cfg.NixWSLPayloadData), strings.TrimRight(string(got), "\x00"),
-		"nix.wsl must be byte-exact (trailing zeros aside)")
+	got, err := isokit.ReadFileFromFAT(imgPath, "/distro.wsl")
+	require.NoError(t, err, "distro.wsl must ship on the answer volume")
+	assert.Equal(t, string(cfg.WSLPayloadData), strings.TrimRight(string(got), "\x00"),
+		"distro.wsl must be byte-exact (trailing zeros aside)")
 }
 
 // Both payloads must ship byte-exact: an MSI's signature and a zip's

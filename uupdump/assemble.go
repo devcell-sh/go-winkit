@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/devcell-sh/go-wimlib"
-	"github.com/devcell-sh/go-winkit/iotrace"
+	"github.com/devcell-sh/go-winkit/internal/iotrace"
 	"github.com/devcell-sh/go-winkit/isokit"
 )
 

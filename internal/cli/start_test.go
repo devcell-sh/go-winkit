@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devcell-sh/go-winkit/vmstate"
+	"github.com/devcell-sh/go-winkit/vm/vmstate"
 )
 
 func TestStartCmd_NoArgNoImage(t *testing.T) {

@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devcell-sh/go-winkit/winpe/qemu"
+	"github.com/devcell-sh/go-winkit/vm/qemu"
 )
 
 func main() {

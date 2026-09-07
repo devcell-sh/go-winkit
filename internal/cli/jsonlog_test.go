@@ -41,9 +41,9 @@ func TestGuestEventHandler_RoundTripsThroughGuestParser(t *testing.T) {
 func TestMultiHandler_FansOutToFileAndDisplay(t *testing.T) {
 	var display, file bytes.Buffer
 	displayH := slog.NewTextHandler(&display, &slog.HandlerOptions{Level: slog.LevelInfo})
-	fileH := newGuestEventHandler(&file)
+	fileH := winpe.NewGuestEventHandler(&file)
 
-	logger := slog.New(multiHandler{handlers: []slog.Handler{displayH, fileH}})
+	logger := slog.New(winpe.MultiHandler(displayH, fileH))
 	logger.Info("hello", "key", "val")
 	logger.Debug("skipped by display")
 

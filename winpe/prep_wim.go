@@ -3,7 +3,7 @@ package winpe
 import (
 	"strings"
 
-	"github.com/devcell-sh/go-winkit/templates"
+	"github.com/devcell-sh/go-winkit/internal/templates"
 )
 
 // WimPrepOp describes a single DISM offline servicing operation to apply to

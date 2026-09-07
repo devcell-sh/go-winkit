@@ -43,7 +43,7 @@ func TestGenerateXML_ValidXML(t *testing.T) {
 // WSL1 distros cannot register without the Microsoft-Windows-Subsystem-Linux
 // optional feature (wsl --import --version 1 exits -1, run 20260903T160300).
 // The specialize dism enables it so the reboot into OOBE completes it before
-// the bootstrap imports nix.wsl. It must be valid XML (dism's 3010 exit is
+// the bootstrap imports distro.wsl. It must be valid XML (dism's 3010 exit is
 // swallowed) and absent when not requested.
 func TestGenerateXML_WSL1FeatureEnable(t *testing.T) {
 	cfg := DefaultConfig()

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/devcell-sh/go-winkit/isokit"
-	"github.com/devcell-sh/go-winkit/wim"
 )
 
 // GosshdVolumeName is gosshd's filename on the shared volume.
@@ -103,7 +102,7 @@ func Build(cfg BuildConfig) (*BuildResult, error) {
 		}
 	}
 
-	if err := wim.InjectWinPEPayload(bootWimPath, injectDir); err != nil {
+	if err := InjectWinPEPayload(bootWimPath, injectDir); err != nil {
 		return nil, fmt.Errorf("injecting WinPE payload: %w", err)
 	}
 
