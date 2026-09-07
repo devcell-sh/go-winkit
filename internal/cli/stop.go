@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/devcell-sh/go-winkit/gosshd"
-	"github.com/devcell-sh/go-winkit/vmstate"
+	"github.com/devcell-sh/go-winkit/vm/vmstate"
 )
 
 func newStopCmd() *cobra.Command {
@@ -127,17 +127,30 @@ func resolveTarget(stateDir, target string) (*vmstate.State, error) {
 	return nil, fmt.Errorf("no VM found for %q (checked name and image path)", target)
 }
 
+// gracefulShutdown asks the guest to shut itself down over gosshd. It is
+// hard-bounded: a wedged guest (or QEMU slirp accepting the forward while
+// the guest never answers) must fall through to SIGTERM, not hang stop.
 func gracefulShutdown(st *vmstate.State) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	addr := fmt.Sprintf("127.0.0.1:%d", st.SSHPort)
-	c, err := gosshd.DialWith(ctx, addr, gosshd.DefaultUser, gosshd.DefaultPassword)
-	if err != nil {
+	res := make(chan bool, 1)
+	go func() {
+		addr := fmt.Sprintf("127.0.0.1:%d", st.SSHPort)
+		c, err := gosshd.DialWith(ctx, addr, gosshd.DefaultUser, gosshd.DefaultPassword)
+		if err != nil {
+			res <- false
+			return
+		}
+		defer c.Close()
+		_, _, _, err = c.Run(ctx, "shutdown /s /t 5")
+		res <- err == nil
+	}()
+	select {
+	case ok := <-res:
+		return ok
+	case <-ctx.Done():
 		return false
 	}
-	defer c.Close()
-	_, _, _, err = c.Run(ctx, "shutdown /s /t 5")
-	return err == nil
 }
 
 func waitForExit(pid int, timeout time.Duration) bool {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/devcell-sh/go-winkit/winpe"
+	"github.com/devcell-sh/go-winkit/wsl"
 )
 
 // Config holds parameters for generating an autounattend.xml file.
@@ -112,17 +113,17 @@ type Config struct {
 	// padding breaks the MSI's digital signature.
 	WinFspPayload     string
 	WinFspPayloadData []byte
-	// NixWSLPayloadData, when non-empty, ships as nix.wsl on the answer
+	// WSLPayloadData, when non-empty, ships as distro.wsl on the answer
 	// volume (byte-exact: it is a gzip tarball). The bootstrap's 'import
-	// WSL1 Nix distro' step scans attached drives for the name and imports
-	// it under DistroName. See the wslnix package for how it is built.
-	NixWSLPayloadData []byte
+	// WSL1 distro' step scans attached drives for the name and imports
+	// it under DistroName. See the wsl package for how it is built.
+	WSLPayloadData []byte
 	// EnableWSL1Feature adds a specialize dism command that enables the
 	// Microsoft-Windows-Subsystem-Linux optional feature (lxcore.sys).
 	// WSL1 distros cannot register without it — wsl --import --version 1
 	// exits -1 (WSL_E_WSL1_NOT_SUPPORTED). Enabled with /norestart during
 	// specialize so the reboot into OOBE completes it before the
-	// first-logon bootstrap imports nix.wsl. The hypervisor-side features
+	// first-logon bootstrap imports distro.wsl. The hypervisor-side features
 	// (VirtualMachinePlatform, Hyper-V) stay host-driven over SSH and
 	// WINKIT_WSL2-gated: WSL1 does not need them.
 	EnableWSL1Feature bool
@@ -1134,8 +1135,8 @@ func BuildAnswerVolume(cfg Config, destPath string) error {
 	if cfg.WinFspPayload != "" && len(cfg.WinFspPayloadData) > 0 {
 		exact["/"+cfg.WinFspPayload] = cfg.WinFspPayloadData
 	}
-	if len(cfg.NixWSLPayloadData) > 0 {
-		exact["/nix.wsl"] = cfg.NixWSLPayloadData
+	if len(cfg.WSLPayloadData) > 0 {
+		exact["/"+wsl.VolumeName] = cfg.WSLPayloadData
 	}
 	return writeAnswerImage(GenerateXML(cfg), extra, exact, destPath)
 }

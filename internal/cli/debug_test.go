@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/devcell-sh/go-winkit/iotrace"
+	"github.com/devcell-sh/go-winkit/internal/iotrace"
 	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

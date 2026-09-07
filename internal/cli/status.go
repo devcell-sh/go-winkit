@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/devcell-sh/go-winkit/vmstate"
+	"github.com/devcell-sh/go-winkit/vm/vmstate"
 )
 
 func newStatusCmd() *cobra.Command {

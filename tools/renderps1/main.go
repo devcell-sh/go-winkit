@@ -11,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/devcell-sh/go-winkit/templates"
+	"github.com/devcell-sh/go-winkit/internal/templates"
 	"github.com/devcell-sh/go-winkit/unattend"
 )
 

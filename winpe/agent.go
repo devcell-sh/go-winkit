@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/devcell-sh/go-winkit/templates"
+	"github.com/devcell-sh/go-winkit/internal/templates"
 )
 
 // ProgressPortName is the virtio-serial port name used for guest-to-host

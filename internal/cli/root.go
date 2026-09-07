@@ -6,7 +6,7 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/devcell-sh/go-winkit/iotrace"
+	"github.com/devcell-sh/go-winkit/internal/iotrace"
 )
 
 // NewRootCmd builds the winkit command tree.

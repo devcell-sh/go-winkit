@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/devcell-sh/go-winkit/vm/qemu"
 	"github.com/devcell-sh/go-winkit/winpe"
-	"github.com/devcell-sh/go-winkit/winpe/qemu"
 )
 
 func newWinPERunCmd() *cobra.Command {

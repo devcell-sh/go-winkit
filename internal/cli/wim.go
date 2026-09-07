@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/devcell-sh/go-winkit/wim"
+	"github.com/devcell-sh/go-winkit/winpe"
 )
 
 func newWimCmd() *cobra.Command {
@@ -30,14 +30,14 @@ func newWimPatchCmd() *cobra.Command {
 		Short: "Apply offline registry patches to a WIM image",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var patches []wim.RegistryPatch
+			var patches []winpe.RegistryPatch
 			if hyperv {
-				patches = append(patches, wim.HyperVBootPatches())
+				patches = append(patches, winpe.HyperVBootPatches())
 			}
 			if len(patches) == 0 {
 				return fmt.Errorf("no patches selected (use --hyperv)")
 			}
-			if err := wim.PatchDevcellWim(args[0], imageNum, patches...); err != nil {
+			if err := winpe.PatchDevcellWim(args[0], imageNum, patches...); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), args[0])
@@ -62,11 +62,11 @@ func newWimInjectCmd() *cobra.Command {
 			"in place.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var patches []wim.RegistryPatch
+			var patches []winpe.RegistryPatch
 			if hyperv {
-				patches = append(patches, wim.HyperVBootPatches())
+				patches = append(patches, winpe.HyperVBootPatches())
 			}
-			if err := wim.InjectWinPEPayload(args[0], payloadDir, patches...); err != nil {
+			if err := winpe.InjectWinPEPayload(args[0], payloadDir, patches...); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), args[0])

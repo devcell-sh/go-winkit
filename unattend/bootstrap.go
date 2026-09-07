@@ -3,7 +3,7 @@ package unattend
 import (
 	_ "embed"
 
-	"github.com/devcell-sh/go-winkit/templates"
+	"github.com/devcell-sh/go-winkit/internal/templates"
 )
 
 // First-logon bootstrap.

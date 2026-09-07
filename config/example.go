@@ -21,8 +21,15 @@ from: windows/11-pro-arm64
 # wsl:
 #   image: alpine
 #   Full disk install with WSL enabled and a distro imported.
-#   Supported images: alpine, ubuntu, debian, or a path to a .wsl tarball.
-#   Cannot be combined with pe.
+#   Cannot be combined with pe. Supported images:
+#     alpine  — docker-built Alpine with WSL plumbing (default)
+#     nix     — docker-built Nix + home-manager environment
+#     <docker ref> — any docker image (ubuntu:24.04, ghcr.io/org/img:tag),
+#       docker-built with universal WSL plumbing (best-effort per distro)
+#     https://…/name.wsl — a published WSL image, downloaded and cached
+#       (e.g. https://cdimages.ubuntu.com/ubuntu-wsl/noble/daily-live/current/noble-wsl-arm64.wsl);
+#       the publisher owns the in-distro setup (default user, wsl.conf)
+#     ./name.wsl — a local rootfs tarball, shipped verbatim
 
 # pe: true
 
@@ -83,7 +90,7 @@ from: windows/11-pro-arm64
 #   wsl:
 #     # Runs after WSL is enabled and the distro is imported.
 #     # Requires "wsl:" to be set above.
-#     - wsl -d alpine -- apk add curl git
+#     - wsl -d winkit -- apk add curl git
 
 # Directory-based hooks (optional, alternative to inline commands).
 # Place scripts in hooks/<phase>/ next to this file:

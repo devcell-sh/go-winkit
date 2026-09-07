@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	charmlog "github.com/charmbracelet/log"
+	"github.com/devcell-sh/go-winkit/winpe"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
@@ -121,10 +121,10 @@ func (u *runUI) AttachLogFile(path string) error {
 		return err
 	}
 	u.logFile = f
-	u.Logger = slog.New(multiHandler{handlers: []slog.Handler{
+	u.Logger = slog.New(winpe.MultiHandler(
 		u.Logger.Handler(),
-		newGuestEventHandler(f),
-	}})
+		winpe.NewGuestEventHandler(f),
+	))
 	return nil
 }
 
@@ -142,44 +142,4 @@ func (u *runUI) Finish(err error) {
 	}
 	u.prog.Send(finishMsg{failed: err != nil})
 	<-u.done
-}
-
-// multiHandler fans slog records out to multiple handlers so one
-// Logger can write to both a display and a structured log file.
-type multiHandler struct {
-	handlers []slog.Handler
-}
-
-func (m multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	for _, h := range m.handlers {
-		if h.Enabled(ctx, level) {
-			return true
-		}
-	}
-	return false
-}
-
-func (m multiHandler) Handle(ctx context.Context, r slog.Record) error {
-	for _, h := range m.handlers {
-		if h.Enabled(ctx, r.Level) {
-			_ = h.Handle(ctx, r)
-		}
-	}
-	return nil
-}
-
-func (m multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	hs := make([]slog.Handler, len(m.handlers))
-	for i, h := range m.handlers {
-		hs[i] = h.WithAttrs(attrs)
-	}
-	return multiHandler{handlers: hs}
-}
-
-func (m multiHandler) WithGroup(name string) slog.Handler {
-	hs := make([]slog.Handler, len(m.handlers))
-	for i, h := range m.handlers {
-		hs[i] = h.WithGroup(name)
-	}
-	return multiHandler{handlers: hs}
 }
