@@ -35,6 +35,12 @@ from: windows/11-pro-arm64
 
 # wsl:
 #   image: alpine
+#   # Directory of s6 service dirs, copied verbatim into /etc/s6/services
+#   # of the distro and supervised by the boot-time s6-svscan task.
+#   # Layout: <dir>/<name>/run (plus optional finish and data files),
+#   # i.e. a standard s6 scan dir. A subdir named like a built-in
+#   # service (sshd) overrides it. Docker-built images only.
+#   services: ./s6
 
 # Windows features to enable. Applied via DISM (PE mode) or
 # Add-WindowsCapability (full install).

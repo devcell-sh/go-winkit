@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/media/isokit"
 )
 
 // ISOInfo holds the result of an ISO preflight check.

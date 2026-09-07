@@ -1,0 +1,3 @@
+#!/bin/sh
+SSHD=$(command -v sshd || echo /usr/sbin/sshd)
+exec "$SSHD" -D -e 2>&1

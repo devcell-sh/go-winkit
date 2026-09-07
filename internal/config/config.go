@@ -12,11 +12,11 @@ import (
 )
 
 type CommandEntry struct {
-	Cmd            string        `yaml:"cmd"`
-	Timeout        duration      `yaml:"timeout"`
-	Retries        int           `yaml:"retries"`
-	ValidExitCodes []int         `yaml:"valid-exit-codes"`
-	Reboot         bool          `yaml:"reboot"`
+	Cmd            string   `yaml:"cmd"`
+	Timeout        duration `yaml:"timeout"`
+	Retries        int      `yaml:"retries"`
+	ValidExitCodes []int    `yaml:"valid-exit-codes"`
+	Reboot         bool     `yaml:"reboot"`
 }
 
 type duration time.Duration
@@ -45,15 +45,20 @@ type FileEntry struct {
 
 type WSLConfig struct {
 	Image string `yaml:"image"`
+	// Services is a path to a directory of s6 service dirs (a standard
+	// s6 scan dir layout: <dir>/<name>/run), copied verbatim into
+	// /etc/s6/services of the distro. A subdir named like a built-in
+	// service (sshd) overrides it.
+	Services string `yaml:"services"`
 }
 
 type Config struct {
-	From     string                       `yaml:"from"`
-	PE       bool                         `yaml:"pe"`
-	WSL      *WSLConfig                   `yaml:"wsl"`
-	Features []string                     `yaml:"features"`
-	Files    []FileEntry                  `yaml:"files"`
-	Commands commandsField                `yaml:"-"`
+	From     string        `yaml:"from"`
+	PE       bool          `yaml:"pe"`
+	WSL      *WSLConfig    `yaml:"wsl"`
+	Features []string      `yaml:"features"`
+	Files    []FileEntry   `yaml:"files"`
+	Commands commandsField `yaml:"-"`
 }
 
 type commandsField struct {

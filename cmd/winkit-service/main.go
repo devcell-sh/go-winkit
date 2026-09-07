@@ -30,11 +30,11 @@ var validVerbs = map[string]bool{
 }
 
 type options struct {
-	verb       string
-	name       string
-	cmd        []string
-	logFile    string
-	logVirtio  string
+	verb      string
+	name      string
+	cmd       []string
+	logFile   string
+	logVirtio string
 }
 
 func parseArgs(args []string) (verb, name string, cmd []string, err error) {

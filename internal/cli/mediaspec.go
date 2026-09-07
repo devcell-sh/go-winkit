@@ -3,7 +3,7 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/devcell-sh/go-winkit/uupdump"
+	"github.com/devcell-sh/go-winkit/media/uupdump"
 )
 
 // addMediaSpecFlags registers the orthogonal media-selection flags,

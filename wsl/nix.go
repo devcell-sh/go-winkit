@@ -77,6 +77,11 @@ func NixRecipe(user, distroName, nixHome string) (Recipe, error) {
 		VerifyCommand:  "nix --version",
 		VerifyContains: "nix (Nix)",
 	}
+	// The template COPYs s6/ into /etc/s6/services unconditionally, so the
+	// context must always carry at least the sshd built-in.
+	if err := r.AddService(SSHDNixService()); err != nil {
+		return Recipe{}, err
+	}
 
 	// The build context always carries ./nixhome (the Dockerfile COPYs it):
 	// the embedded default flake templated with the user, a copy of the

@@ -10,7 +10,7 @@ import (
 
 	"github.com/devcell-sh/go-wimlib"
 	"github.com/devcell-sh/go-winkit/internal/iotrace"
-	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/media/isokit"
 )
 
 type AssembleConfig struct {

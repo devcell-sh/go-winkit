@@ -28,6 +28,7 @@ func TestParse_FullConfig(t *testing.T) {
 from: windows/11-pro-arm64
 wsl:
   image: alpine
+  services: ./s6
 features:
   - OpenSSH.Server
   - Containers
@@ -49,6 +50,9 @@ commands:
 
 	if cfg.WSL == nil || cfg.WSL.Image != "alpine" {
 		t.Fatalf("wsl = %+v", cfg.WSL)
+	}
+	if cfg.WSL.Services != "./s6" {
+		t.Fatalf("wsl.services = %q", cfg.WSL.Services)
 	}
 	if len(cfg.Features) != 2 {
 		t.Fatalf("features = %v", cfg.Features)

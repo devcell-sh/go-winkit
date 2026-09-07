@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/devcell-sh/go-winkit/config"
+	"github.com/devcell-sh/go-winkit/internal/config"
 )
 
 func newInitCmd() *cobra.Command {

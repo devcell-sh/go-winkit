@@ -3,7 +3,7 @@ package config
 import (
 	"fmt"
 
-	"github.com/devcell-sh/go-winkit/buildopts"
+	"github.com/devcell-sh/go-winkit/build/buildopts"
 )
 
 var phaseMap = map[string]buildopts.HookPhase{
@@ -21,7 +21,7 @@ func (c *Config) ToBuildOpts() (*buildopts.BuildOpts, error) {
 	}
 
 	if c.WSL != nil {
-		opts.WSL = &buildopts.WSLConfig{Image: c.WSL.Image}
+		opts.WSL = &buildopts.WSLConfig{Image: c.WSL.Image, ServicesDir: c.WSL.Services}
 	}
 
 	for phaseName, cmds := range c.Commands.Phases {
@@ -77,4 +77,3 @@ func (c *Config) ToBuildOpts() (*buildopts.BuildOpts, error) {
 
 	return opts, nil
 }
-

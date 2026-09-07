@@ -1,0 +1,2 @@
+#!/bin/sh
+exec sshd -D -e -f /etc/ssh/sshd_config 2>&1

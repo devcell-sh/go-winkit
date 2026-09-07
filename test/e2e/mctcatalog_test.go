@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/devcell-sh/go-winkit/mctcatalog"
+	"github.com/devcell-sh/go-winkit/media/mctcatalog"
 )
 
 // TestFetchWindowsISO_Download is a long test: downloads a ~4.3 GB ESD from

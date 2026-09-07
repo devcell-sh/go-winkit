@@ -16,7 +16,8 @@ import (
 	"time"
 
 	"github.com/devcell-sh/go-winkit/gosshd"
-	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/media/isokit"
+	"github.com/devcell-sh/go-winkit/s6"
 	"github.com/devcell-sh/go-winkit/sftpshare"
 	"github.com/devcell-sh/go-winkit/unattend"
 	"github.com/devcell-sh/go-winkit/vm"
@@ -178,7 +179,7 @@ func ResolveBackend() (vm.VMBackend, string, error) {
 // engages requires booting it on a TCG secure/EL3 machine (see CELL-495),
 // which this build does not do: it uses the fastest available accelerator
 // (HVF on Mac, KVM on Linux) for the install.
-func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome, displayType string) error {
+func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, services []s6.Service, displayType string) error {
 	// --accel flag wins; then WINKIT_E2E_ACCEL env; then the best available
 	// accelerator for the host (HVF on Mac, KVM on Linux, TCG fallback).
 	// The install does not need secure/EL3: features are staged with
@@ -250,6 +251,13 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	distro, err := wsl.DistroFor(wslImageName, unattend.SessionUsername(), unattend.DefaultConfig().DistroName, nixHome)
 	if err != nil {
 		return err
+	}
+	// Extra s6 services bake into the rootfs; PutService so a user service
+	// named like a built-in (sshd) overrides it instead of erroring.
+	for _, svc := range services {
+		if err := distro.PutService(svc); err != nil {
+			return fmt.Errorf("adding s6 service %s: %w", svc.Name, err)
+		}
 	}
 	dockerMissing := false
 	if distro.NeedsDocker() {

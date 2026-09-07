@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devcell-sh/go-winkit/buildopts"
+	"github.com/devcell-sh/go-winkit/build/buildopts"
 )
 
 func TestToBuildOpts_BasicConversion(t *testing.T) {
@@ -39,7 +39,7 @@ func TestToBuildOpts_BasicConversion(t *testing.T) {
 func TestToBuildOpts_WSLConversion(t *testing.T) {
 	cfg := &Config{
 		From: "windows/11-pro-arm64",
-		WSL:  &WSLConfig{Image: "alpine"},
+		WSL:  &WSLConfig{Image: "alpine", Services: "./s6"},
 		Commands: commandsField{
 			Phases: map[string][]CommandEntry{
 				"wsl": {{Cmd: "wsl -d alpine -- apk add curl"}},
@@ -53,6 +53,9 @@ func TestToBuildOpts_WSLConversion(t *testing.T) {
 	}
 	if opts.WSL == nil || opts.WSL.Image != "alpine" {
 		t.Fatalf("wsl = %+v", opts.WSL)
+	}
+	if opts.WSL.ServicesDir != "./s6" {
+		t.Fatalf("wsl.ServicesDir = %q", opts.WSL.ServicesDir)
 	}
 }
 
@@ -78,9 +81,9 @@ func TestToBuildOpts_PEConversion(t *testing.T) {
 
 func TestToBuildOpts_PEWSLError(t *testing.T) {
 	cfg := &Config{
-		From: "windows/11-pro-arm64",
-		PE:   true,
-		WSL:  &WSLConfig{Image: "alpine"},
+		From:     "windows/11-pro-arm64",
+		PE:       true,
+		WSL:      &WSLConfig{Image: "alpine"},
 		Commands: commandsField{Phases: make(map[string][]CommandEntry)},
 	}
 
