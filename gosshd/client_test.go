@@ -3,7 +3,9 @@ package gosshd
 import (
 	"bytes"
 	"context"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,6 +37,46 @@ func TestClient_DialTimeout(t *testing.T) {
 	defer cancel()
 	_, err := Dial(ctx, "127.0.0.1:1") // unreachable
 	assert.Error(t, err)
+}
+
+// A peer that accepts TCP but never speaks SSH (QEMU slirp hostfwd with a
+// wedged guest) must fail the handshake at the deadline, not hang forever.
+func TestClient_DialSilentPeer(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close() // accept and stay silent
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err = Dial(ctx, ln.Addr().String())
+	assert.Error(t, err)
+	assert.Less(t, time.Since(start), 10*time.Second, "dial must respect the deadline against a silent peer")
+}
+
+// Run must return when its context is cancelled instead of blocking on a
+// command that never finishes.
+func TestClient_RunContextCancelled(t *testing.T) {
+	addr := testServerWithShell(t)
+	c, err := Dial(context.Background(), addr)
+	require.NoError(t, err)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, _, err = c.Run(ctx, "sleep 30")
+	assert.Error(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second, "Run must unblock on ctx cancellation")
 }
 
 func TestClient_Run_Echo(t *testing.T) {
