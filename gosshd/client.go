@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"time"
 
 	cryptossh "golang.org/x/crypto/ssh"
@@ -38,15 +39,28 @@ func DialWith(ctx context.Context, addr, user, password string) (*Client, error)
 		Timeout:         timeout,
 	}
 
-	conn, err := cryptossh.Dial("tcp", addr, cfg)
+	// Dial and handshake under one deadline. ClientConfig.Timeout only
+	// bounds the TCP connect; a peer that accepts and then never speaks
+	// SSH — QEMU's slirp hostfwd does exactly this while the guest is
+	// wedged or shutting down — would hang the handshake forever.
+	netConn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("dialing gosshd at %s: %w", addr, err)
 	}
-	return &Client{conn: conn}, nil
+	_ = netConn.SetDeadline(time.Now().Add(timeout))
+	sshConn, chans, reqs, err := cryptossh.NewClientConn(netConn, addr, cfg)
+	if err != nil {
+		netConn.Close()
+		return nil, fmt.Errorf("dialing gosshd at %s: %w", addr, err)
+	}
+	_ = netConn.SetDeadline(time.Time{})
+	return &Client{conn: cryptossh.NewClient(sshConn, chans, reqs)}, nil
 }
 
 // Run executes a command and returns captured stdout, stderr, and exit code.
-func (c *Client) Run(_ context.Context, cmd string) (stdout, stderr []byte, exitCode int, err error) {
+// Cancelling ctx closes the session and returns ctx.Err() instead of
+// blocking on a guest that never answers.
+func (c *Client) Run(ctx context.Context, cmd string) (stdout, stderr []byte, exitCode int, err error) {
 	sess, err := c.conn.NewSession()
 	if err != nil {
 		return nil, nil, -1, fmt.Errorf("creating session: %w", err)
@@ -57,7 +71,7 @@ func (c *Client) Run(_ context.Context, cmd string) (stdout, stderr []byte, exit
 	sess.Stdout = &outBuf
 	sess.Stderr = &errBuf
 
-	runErr := sess.Run(cmd)
+	runErr := runSession(ctx, sess, cmd)
 	if runErr != nil {
 		if exitErr, ok := runErr.(*cryptossh.ExitError); ok {
 			return outBuf.Bytes(), errBuf.Bytes(), exitErr.ExitStatus(), nil
@@ -67,8 +81,24 @@ func (c *Client) Run(_ context.Context, cmd string) (stdout, stderr []byte, exit
 	return outBuf.Bytes(), errBuf.Bytes(), 0, nil
 }
 
+// runSession runs cmd on sess, unblocking on ctx cancellation. sess.Close
+// is best-effort — a fully wedged transport may leak the goroutine, which
+// is acceptable for the short-lived CLI callers this protects.
+func runSession(ctx context.Context, sess *cryptossh.Session, cmd string) error {
+	done := make(chan error, 1)
+	go func() { done <- sess.Run(cmd) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		sess.Close()
+		return ctx.Err()
+	}
+}
+
 // RunStream executes a command and streams output to the provided writers.
-func (c *Client) RunStream(_ context.Context, cmd string, stdout, stderr io.Writer) (int, error) {
+// Cancelling ctx closes the session, like Run.
+func (c *Client) RunStream(ctx context.Context, cmd string, stdout, stderr io.Writer) (int, error) {
 	sess, err := c.conn.NewSession()
 	if err != nil {
 		return -1, fmt.Errorf("creating session: %w", err)
@@ -78,7 +108,7 @@ func (c *Client) RunStream(_ context.Context, cmd string, stdout, stderr io.Writ
 	sess.Stdout = stdout
 	sess.Stderr = stderr
 
-	runErr := sess.Run(cmd)
+	runErr := runSession(ctx, sess, cmd)
 	if runErr != nil {
 		if exitErr, ok := runErr.(*cryptossh.ExitError); ok {
 			return exitErr.ExitStatus(), nil
