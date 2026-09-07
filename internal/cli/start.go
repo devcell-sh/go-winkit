@@ -118,7 +118,10 @@ func newStartCmd() *cobra.Command {
 				return fmt.Errorf("creating output dir: %w", err)
 			}
 
-			hostLogFile, err := os.Create(filepath.Join(outDir, "host.jsonl"))
+			// run.jsonl is the run's unified structured log: host events
+			// stream in live; `winkit stop` appends the guest's raw event
+			// stream (guest.jsonl, written by the QEMU process) on teardown.
+			hostLogFile, err := os.Create(filepath.Join(outDir, "run.jsonl"))
 			if err != nil {
 				return fmt.Errorf("creating host log: %w", err)
 			}
@@ -161,7 +164,7 @@ func newStartCmd() *cobra.Command {
 				SMBIOSSerial:    unattend.DefaultConfig().Hostname,
 			}
 
-			structuredLog := filepath.Join(outDir, name+".jsonl")
+			structuredLog := filepath.Join(outDir, "guest.jsonl")
 
 			switch backendName {
 			case "qemu":
@@ -271,7 +274,6 @@ func discoverImage(dir string) string {
 		"winkit-base.qcow2",
 		"winkit-wsl.qcow2",
 		"winkit-core.qcow2",
-		"wsl2.qcow2",
 		"winkit-base.raw",
 		"winkit-wsl.raw",
 	} {

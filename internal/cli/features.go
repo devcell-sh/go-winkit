@@ -20,7 +20,7 @@ func newListFeaturesCmd() *cobra.Command {
 		Short: "Show the capabilities baked into a WIM image",
 		Long: "Inspects a WIM image and prints the winkit-relevant capabilities it\n" +
 			"carries, grouped by area: the winkit payload, the event-log/ETW\n" +
-			"stack, and the hypervisor/VMP stack. A ✓ means the binary, service,\n" +
+			"stack. A ✓ means the binary, service,\n" +
 			"or channel is present; – means absent.\n\n" +
 			"--image selects the WIM image (2 = WinPE boot.wim, the default; 1 =\n" +
 			"install.wim's first edition). --path <dir> switches to browse mode:\n" +

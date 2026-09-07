@@ -52,11 +52,7 @@ func (f Format) String() string {
 }
 
 func DefaultOutputName(stage string, f Format) string {
-	base := "winkit-" + stage
-	if stage == "wsl2" {
-		base = "wsl2"
-	}
-	return base + f.Ext()
+	return "winkit-" + stage + f.Ext()
 }
 
 type PackageOpts struct {

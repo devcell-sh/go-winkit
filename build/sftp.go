@@ -102,13 +102,21 @@ func wslVerifySFTP(ctx context.Context, addr, user, pass string, srv *sftpshare.
 	}
 	defer os.Remove(probePath)
 
-	// Re-run the mount task: idempotent (a second rclone on a busy drive
-	// letter exits; the running one keeps serving), and it revives the mount
-	// when the host server restarted since boot.
+	// Revive the mount if the host server restarted since boot. Two shapes
+	// exist: the legacy scheduled task, and the s6-supervised service baked
+	// into the distro (RcloneViaS6) — the disk under test can be either, so
+	// try the task first and fall back to restarting the s6 service.
 	if _, stderr, exit, err := sshRun(ctx, addr, user, pass,
 		"schtasks /run /tn "+unattend.RcloneMountTaskName); err != nil || exit != 0 {
-		logger.Warn("sftp verify: mount task re-run failed (base built before SFTP sharing?)",
-			"exit", exit, "stderr", strings.TrimSpace(string(stderr)), "err", err)
+		distro := unattend.DefaultConfig().DistroName
+		if _, s6err, s6exit, err2 := sshRun(ctx, addr, user, pass, fmt.Sprintf(
+			`$env:WSL_UTF8='1'; wsl.exe -d %s -u root -e /bin/sh -lc "s6-svc -r /etc/s6/services/rclone-mount"`, distro)); err2 == nil && s6exit == 0 {
+			logger.Info("sftp verify: restarted s6-supervised rclone-mount", "distro", distro)
+		} else {
+			logger.Warn("sftp verify: no mount task and no s6 rclone-mount service reachable",
+				"taskExit", exit, "taskStderr", strings.TrimSpace(string(stderr)), "taskErr", err,
+				"s6Exit", s6exit, "s6Stderr", strings.TrimSpace(string(s6err)), "s6Err", err2)
+		}
 	}
 
 	// The guest reads the probe through the mounted drive. The mount comes
@@ -124,6 +132,17 @@ func wslVerifySFTP(ctx context.Context, addr, user, pass string, srv *sftpshare.
 		}
 		lastOut, lastErr = strings.TrimSpace(string(stdout)), strings.TrimSpace(string(stderr))
 		if time.Now().After(deadline) {
+			// Pull the mount's own story before failing: rclone's log and
+			// the s6 supervision state are the two places the cause lives.
+			distro := unattend.DefaultConfig().DistroName
+			if diag, _, _, derr := sshRun(ctx, addr, user, pass,
+				`Get-Content C:\rclone-mount.log -Tail 30 -ErrorAction SilentlyContinue`); derr == nil {
+				logger.Warn("sftp verify: rclone-mount.log tail", "log", strings.TrimSpace(string(diag)))
+			}
+			if diag, _, _, derr := sshRun(ctx, addr, user, pass, fmt.Sprintf(
+				`$env:WSL_UTF8='1'; wsl.exe -d %s -u root -e /bin/sh -lc "s6-svstat /etc/s6/services/rclone-mount 2>&1; ls -l '/mnt/c/Program Files/rclone/' 2>&1"`, distro)); derr == nil {
+				logger.Warn("sftp verify: s6 rclone-mount state", "state", strings.TrimSpace(string(diag)))
+			}
 			return fmt.Errorf("guest cannot read probe through %s: (last: out=%q err=%q)", drive, lastOut, lastErr)
 		}
 		select {

@@ -45,12 +45,6 @@ const (
 	wslInstallWait     = 4 * time.Hour
 	wslContinueWait    = 10 * time.Minute
 	wslSSHPollEvery    = 30 * time.Second
-	// wsl2FeatureEnableWait bounds how long feature-enable is retried. gosshd
-	// answers during OOBE ("Getting things ready for you"), where
-	// Enable-WindowsOptionalFeature fails until the servicing stack is free, so
-	// the first attempts are expected to fail and are retried until the OS
-	// settles past OOBE.
-	wsl2FeatureEnableWait = 45 * time.Minute
 	// wslBootVolumeCapacity is the virtual size of the FAT Setup boot qcow2.
 	// It holds the retail Setup boot.wim (~700MB) plus the boot chain; the
 	// qcow2 is sparse, so this is a ceiling, not an allocation.
@@ -80,16 +74,6 @@ func vzVNCPort() uint16 {
 	return vzDefaultVNCPort()
 }
 
-// wsl2Features are the Windows optional features the wsl2 stage stages and
-// verifies. WSL2 needs all three: VirtualMachinePlatform (the lightweight
-// utility VM), the WSL subsystem, and the Hyper-V platform the hypervisor
-// engages on a secure/EL3 boot. Shared by enable and verify so they can't drift.
-var wsl2Features = []string{
-	"VirtualMachinePlatform",
-	"Microsoft-Windows-Subsystem-Linux",
-	"Microsoft-Hyper-V-All",
-}
-
 // wslAnswerConfig builds the autounattend config for the wsl stage: a full
 // installed OS reachable over SSH + RDP, with the network + serial virtio
 // drivers registered in specialize. Feature-enable is deliberately NOT here —
@@ -109,8 +93,7 @@ func wslAnswerConfig(pwshFiles map[string][]byte, opensshName string, opensshDat
 	// WSL1 needs the Microsoft-Windows-Subsystem-Linux optional feature; the
 	// specialize→OOBE reboot completes it before the bootstrap imports
 	// distro.wsl. Without it wsl --import --version 1 exits -1 (run
-	// 20260903T160300). Not gated by WINKIT_WSL2: that gates only the
-	// hypervisor stack.
+	// 20260903T160300).
 	cfg.EnableWSL1Feature = true
 	// gosshd is the provisioning SSH: specialize copies it to C: and registers
 	// an onstart SYSTEM task on wslGosshdGuestPort, so a reachable, elevated
@@ -129,7 +112,7 @@ func wslAnswerConfig(pwshFiles map[string][]byte, opensshName string, opensshDat
 
 // wslWinPEAgentConfig enables the WinPE control agent for the wsl install:
 // it tees Setup's Panther logs (setupact/setuperr) to the structured port as
-// JSON, giving build.jsonl coverage of the windowsPE phase — gosshd, the
+// JSON, giving the guest event stream coverage of the windowsPE phase — gosshd, the
 // other producer, only starts in specialize. The vioserial driver must be
 // drvloaded in windowsPE for the ports to exist (retail WinPE has none);
 // missing drivers degrade to a blind-but-working agent, so a virtio ISO
@@ -138,7 +121,7 @@ func wslWinPEAgentConfig(cfg *unattend.Config, virtioISO string, logger interfac
 	cfg.WinPEAgent = true
 	drivers, err := winpe.LoadWinPEVioserialDrivers(virtioISO)
 	if err != nil {
-		logger.Warn("no ARM64 vioserial driver for WinPE — Panther logs will not stream to build.jsonl during Setup", "err", err)
+		logger.Warn("no ARM64 vioserial driver for WinPE — Panther logs will not stream to guest.jsonl during Setup", "err", err)
 		return
 	}
 	if cfg.AnswerDrivers == nil {
@@ -173,17 +156,12 @@ func ResolveBackend() (vm.VMBackend, string, error) {
 }
 
 // buildWSLImage performs a full unattended Windows-on-ARM install to dest,
-// with the WSL1 feature enabled in specialize and the nix distro imported at first
-// logon. With WINKIT_WSL2=true it also enables the WSL2/Hyper-V feature stack
-// online over SSH; verifying the hypervisor actually
-// engages requires booting it on a TCG secure/EL3 machine (see CELL-495),
-// which this build does not do: it uses the fastest available accelerator
-// (HVF on Mac, KVM on Linux) for the install.
+// with the WSL1 feature enabled in specialize and the distro imported at first
+// logon. The install uses the fastest available accelerator (HVF on Mac,
+// KVM on Linux, TCG fallback); WSL1 needs no hypervisor features.
 func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, services []s6.Service, displayType string) error {
 	// --accel flag wins; then WINKIT_E2E_ACCEL env; then the best available
 	// accelerator for the host (HVF on Mac, KVM on Linux, TCG fallback).
-	// The install does not need secure/EL3: features are staged with
-	// -NoRestart and engage on the first secure boot of the produced disk.
 	if accel == "" {
 		accel = os.Getenv("WINKIT_E2E_ACCEL")
 	}
@@ -244,8 +222,7 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 
 	// WSL1 rootfs (distro.wsl): built via docker (wsl package), shipped on
 	// the answer volume, imported by the first-logon bootstrap. WSL1
-	// needs no nested virtualization, so this is part of every image; the
-	// hypervisor feature stack is the WSL2-only extra behind WINKIT_WSL2.
+	// needs no nested virtualization, so this is part of every image.
 	// A host without docker still produces a working image, just without
 	// the preloaded distro (the bootstrap step logs "no distro.wsl" and skips).
 	distro, err := wsl.DistroFor(wslImageName, unattend.SessionUsername(), unattend.DefaultConfig().DistroName, nixHome)
@@ -259,11 +236,51 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 			return fmt.Errorf("adding s6 service %s: %w", svc.Name, err)
 		}
 	}
+
+	// Host directory sharing: serve the shared dir over loopback SFTP; the
+	// guest mounts it as a fixed disk via WinFsp + rclone (see sftpshare;
+	// CELL-532/536). qemu-backend only: the guest reaches the host loopback
+	// at 10.0.2.2 via slirp. Started before the distro is materialized so
+	// the rclone-mount s6 service can bake the port into the rootfs; the
+	// same values are rendered into the bootstrap.
+	sharedDir, err := wslSharedDir()
+	if err != nil {
+		return err
+	}
 	dockerMissing := false
 	if distro.NeedsDocker() {
 		_, derr := exec.LookPath("docker")
 		dockerMissing = derr != nil
 	}
+	var sftpSrv *sftpshare.Server
+	rcloneViaS6 := false
+	if sharedDir != "" && backendName == "qemu" {
+		var serr error
+		sftpSrv, serr = startSFTPShare(sharedDir, logger)
+		if serr != nil {
+			return fmt.Errorf("starting SFTP share: %w", serr)
+		}
+		defer sftpSrv.Close()
+		logger.Info("sharing host directory over SFTP", "dir", sharedDir, "port", sftpSrv.Port())
+
+		// The mount's process lifetime moves into the distro's s6 loop
+		// (interop-exec'd rclone.exe, restart-on-crash for free). Only
+		// docker-built distros can bake the service; prebuilt tarballs
+		// and dockerless hosts (no distro at all) keep the bootstrap's
+		// scheduled-task path.
+		if distro.NeedsDocker() && !dockerMissing {
+			mount, merr := wsl.RcloneMountService(unattend.DefaultGuestHostIP, sftpSrv.Port(),
+				sftpSrv.User(), sftpSrv.Password(), unattend.DefaultSFTPDrive, unattend.DefaultSFTPVolumeName)
+			if merr != nil {
+				return fmt.Errorf("building rclone-mount service: %w", merr)
+			}
+			if merr := distro.AddService(mount); merr != nil {
+				return fmt.Errorf("adding rclone-mount service: %w", merr)
+			}
+			rcloneViaS6 = true
+		}
+	}
+
 	var wslData []byte
 	if dockerMissing {
 		logger.Warn("docker not on PATH; skipping the preloaded WSL1 distro")
@@ -297,24 +314,10 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		cfg.GosshdVsockPort = vzGosshdVsockPort()
 	}
 
-	// Host directory sharing: serve the shared dir over loopback SFTP and
-	// let the first-logon bootstrap mount it as a fixed disk via WinFsp +
-	// rclone (see sftpshare; CELL-532/536). qemu-backend only: the guest
-	// reaches the host loopback at 10.0.2.2 via slirp; the port is rendered
-	// into the bootstrap's boot-time mount task, so start before the answer
-	// volume is built.
-	sharedDir, err := wslSharedDir()
-	if err != nil {
-		return err
-	}
-	var sftpSrv *sftpshare.Server
-	if sharedDir != "" && backendName == "qemu" {
-		var serr error
-		sftpSrv, serr = startSFTPShare(sharedDir, logger)
-		if serr != nil {
-			return fmt.Errorf("starting SFTP share: %w", serr)
-		}
-		defer sftpSrv.Close()
+	// Render the share into the bootstrap: payloads always; the mount task
+	// only when the rclone-mount s6 service was not baked (RcloneViaS6
+	// switches the bootstrap to install-and-verify only).
+	if sftpSrv != nil {
 		cfg.SFTPPort = sftpSrv.Port()
 		cfg.SFTPUser = sftpSrv.User()
 		cfg.SFTPPassword = sftpSrv.Password()
@@ -322,7 +325,7 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		cfg.RclonePayloadData = rcloneData
 		cfg.WinFspPayload = unattend.WinFspPayloadName
 		cfg.WinFspPayloadData = winfspData
-		logger.Info("sharing host directory over SFTP", "dir", sharedDir, "port", sftpSrv.Port())
+		cfg.RcloneViaS6 = rcloneViaS6
 	}
 
 	answerImg := filepath.Join(workDir, "autounattend.img")
@@ -367,9 +370,11 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	}
 
 	// --- Phase 1-3: boot Setup, install, first-logon bootstrap ---
-	// build.jsonl is a deliverable, not an intermediate: it lands next to the
-	// produced disk (results root), matching the TestWimBuilder convention.
-	buildJSONL := filepath.Join(filepath.Dir(dest), "build.jsonl")
+	// guest.jsonl is the raw guest event stream (QEMU vioserial chardev,
+	// written by the QEMU process). It is a work-dir intermediate: the edge
+	// (CLI / e2e test) appends it into the unified build.jsonl after the
+	// build, since two processes cannot share one append stream live.
+	guestJSONL := filepath.Join(workDir, "guest.jsonl")
 	installOut := filepath.Join(workDir, "install")
 	secure := strings.HasPrefix(accel, "tcg")
 	logger.Info("starting Windows install VM",
@@ -392,7 +397,7 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	switch backendName {
 	case "qemu":
 		installCfg.BackendExtra = &qemu.InstallOptions{
-			StructuredLogPath: buildJSONL,
+			StructuredLogPath: guestJSONL,
 			BootVolume:        bootVolume,
 			Secure:            secure,
 			DisplayType:       displayType,
@@ -406,10 +411,12 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	}
 	defer machine.Stop()
 
-	// Stream guest progress to the UI while Setup runs (build.jsonl needs
+	// Stream guest progress to the UI while Setup runs (guest.jsonl needs
 	// vioserial, up only from specialize; the plain progress log covers earlier).
 	stopTail := make(chan struct{})
-	go tailProgress(filepath.Join(machine.OutputDir(), "guest-progress.log"), logger, stopTail)
+	go tailStream(filepath.Join(machine.OutputDir(), "guest-progress.log"), "progress", logger, stopTail)
+	go tailStream(filepath.Join(machine.OutputDir(), "serial.log"), "serial", logger, stopTail)
+	go tailStream(filepath.Join(machine.OutputDir(), "qemu.log"), "qemu", logger, stopTail)
 	qmpSock := qemu.QMPSocketFromVM(machine)
 
 	// --- handoff: wait for the gosshd provisioning channel ---
@@ -429,20 +436,8 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	close(stopTail)
 	logger.Info("provisioning channel up (gosshd, SYSTEM)")
 
-	// --- Phase 4: post-SSH, host-driven feature enable (over gosshd, as SYSTEM) ---
-	// WSL2-only: the hypervisor feature stack (VMP/WSL/Hyper-V) needs nested
-	// virtualization on the eventual runtime host. WSL1 (the default) runs on
-	// plain virt, so the baseline skips it entirely.
-	if wsl2StackEnabled() {
-		if err := wsl2EnableFeatures(ctx, provAddr, provUser, provPass, logger); err != nil {
-			return fmt.Errorf("enabling WSL2/Hyper-V features: %w", err)
-		}
-	} else {
-		logger.Info("WINKIT_WSL2 not set — skipping the hypervisor feature stack (WSL1-only image)")
-	}
-
-	// --- verify: SSH + RDP (+ features when WSL2); the delivered Windows OpenSSH on :22 ---
-	if err := wslVerify(ctx, provAddr, provUser, provPass, wslRDPPort, wsl2StackEnabled(), logger); err != nil {
+	// --- verify: SSH + RDP; the delivered Windows OpenSSH on :22 ---
+	if err := wslVerify(ctx, provAddr, provUser, provPass, wslRDPPort, logger); err != nil {
 		return fmt.Errorf("post-install verification: %w", err)
 	}
 	wslVerifyDeliveredSSH(ctx, cfg.Username, cfg.Password, logger)
@@ -577,79 +572,13 @@ func decodeWSLOutput(b []byte) string {
 	return strings.ReplaceAll(string(b), "\x00", "")
 }
 
-// wsl2EnableFeatures enables the virtualization feature stack online. It does
-// NOT reboot: enabling Hyper-V sets hypervisorlaunchtype=Auto, and a hypervisor-
-// enabled boot only succeeds on the secure/EL3 machine — rebooting here on the
-// plain-virt install machine would hang Windows (Vogtinator/CELL-495). The
-// features are staged with -NoRestart and take effect on the first secure boot.
-func wsl2EnableFeatures(ctx context.Context, addr, user, pass string, logger interface{ Info(string, ...any) }) error {
-	logger.Info("enabling VirtualMachinePlatform + WSL + Hyper-V (online, -NoRestart; retried until past OOBE)")
-	// Runs under gosshd's powershell shell (see the -shell powershell task), so
-	// this is sent verbatim, no cmd wrapping. The sentinel proves the whole
-	// pipeline ran, not just that the shell started. The feature list is shared
-	// with wslVerify so enable and verify can never drift.
-	quoted := "'" + strings.Join(wsl2Features, "','") + "'"
-	enable := fmt.Sprintf(`$ErrorActionPreference='Stop'; foreach($f in %s){ Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart | Out-Null }; 'FEATURES-ENABLED'`, quoted)
-	deadline := time.Now().Add(wsl2FeatureEnableWait)
-	for attempt := 1; ; attempt++ {
-		out, errb, code, err := sshRun(ctx, addr, user, pass, enable)
-		if err == nil && code == 0 && strings.Contains(string(out), "FEATURES-ENABLED") {
-			logger.Info("features staged; hypervisor engages only on a secure/EL3 boot of the produced disk")
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("Enable-WindowsOptionalFeature never succeeded within %s (last: exit=%d err=%v out=%q stderr=%q)",
-				wsl2FeatureEnableWait, code, err, strings.TrimSpace(string(out)), strings.TrimSpace(string(errb)))
-		}
-		logger.Info("feature-enable not ready (likely still in OOBE), retrying",
-			"attempt", attempt, "exit", code, "stderr", strings.TrimSpace(string(errb)))
-		time.Sleep(wslSSHPollEvery)
-	}
-}
-
-// wsl2StackEnabled reports whether the WSL2 hypervisor feature stack is
-// requested (WINKIT_WSL2=true/1). Default false: WSL1 needs none of it.
-func wsl2StackEnabled() bool {
-	v := os.Getenv("WINKIT_WSL2")
-	return v == "true" || v == "1"
-}
-
-// wslVerify confirms SSH + RDP are reachable, and — when checkFeatures —
-// that the staged feature stack is enabled. The hypervisor-engaged check
-// (HypervisorPresent=True) requires a secure/EL3 boot of the produced disk
-// and is left to the finalize test (CELL-495).
-func wslVerify(ctx context.Context, addr, user, pass string, rdpPort uint16, checkFeatures bool, logger interface{ Info(string, ...any) }) error {
+// wslVerify confirms SSH + RDP are reachable.
+func wslVerify(ctx context.Context, addr, user, pass string, rdpPort uint16, logger interface{ Info(string, ...any) }) error {
 	who, _, code, err := sshRun(ctx, addr, user, pass, "whoami")
 	if err != nil || code != 0 {
 		return fmt.Errorf("whoami over SSH failed: code=%d err=%v", code, err)
 	}
 	logger.Info("SSH verified", "whoami", strings.TrimSpace(string(who)))
-
-	features := wsl2Features
-	if !checkFeatures {
-		features = nil
-	}
-	// Assert ALL three features the enable staged, not just Hyper-V: WSL2 needs
-	// VirtualMachinePlatform + the WSL subsystem, and a run that enabled only
-	// Hyper-V would still look "green" against a Hyper-V-only check.
-	for _, feature := range features {
-		feat, _, _, err := sshRun(ctx, addr, user, pass,
-			fmt.Sprintf(`(Get-WindowsOptionalFeature -Online -FeatureName %s).State`, feature))
-		if err != nil {
-			return fmt.Errorf("querying %s state: %w", feature, err)
-		}
-		state := strings.TrimSpace(string(feat))
-		logger.Info("feature state", "feature", feature, "state", state)
-		// -NoRestart without a reboot leaves each feature Enabled or
-		// EnablePending; either means the enable took (it activates on the
-		// first secure boot).
-		if !strings.EqualFold(state, "Enabled") && !strings.EqualFold(state, "EnablePending") {
-			return fmt.Errorf("%s not enabled (got %q)", feature, state)
-		}
-	}
 
 	rdpAddr := fmt.Sprintf("127.0.0.1:%d", rdpPort)
 	c, err := net.DialTimeout("tcp", rdpAddr, 10*time.Second)
@@ -682,9 +611,6 @@ func wslTeardownGosshd(ctx context.Context, addr, user, pass string, logger inte
 // and do manual tests, then bakes the session's changes into a standalone
 // wsl-baked.qcow2 on shutdown. This needs gosshd on the base (build it with
 // WINKIT_E2E_TEARDOWN=false), since gosshd is the reachable channel.
-//
-// The default accelerator is TCG (secure/EL3): continue mode is the
-// verification path where the hypervisor must actually engage.
 func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string, logger *slog.Logger, accel, backendName string, backend vm.VMBackend) error {
 	if accel == "" {
 		accel = os.Getenv("WINKIT_E2E_ACCEL")
@@ -836,7 +762,7 @@ func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string
 	// down — log it and keep going. Only the non-interactive (CI) path treats a
 	// verify failure as fatal.
 	if gosshdUp {
-		if err := wslVerify(ctx, provAddr, provUser, provPass, wslRDPPort, wsl2StackEnabled(), logger); err != nil {
+		if err := wslVerify(ctx, provAddr, provUser, provPass, wslRDPPort, logger); err != nil {
 			if !interactive {
 				return fmt.Errorf("continue-mode verification: %w", err)
 			}
@@ -984,34 +910,46 @@ func sshRun(ctx context.Context, addr, user, pass, cmd string) (stdout, stderr [
 
 // tailProgress streams appended lines of the guest progress log to the logger
 // until stop is closed.
-func tailProgress(path string, logger interface{ Info(string, ...any) }, stop <-chan struct{}) {
+func tailStream(path, source string, logger *slog.Logger, stop <-chan struct{}) {
 	var off int64
+	var partial string
+	emit := func(chunk string) {
+		lines := strings.Split(partial+chunk, "\n")
+		partial = lines[len(lines)-1] // may be an incomplete tail line
+		for _, line := range lines[:len(lines)-1] {
+			if s := strings.TrimSpace(strings.TrimRight(line, "\r")); s != "" {
+				logger.Info(s, "source", source)
+			}
+		}
+	}
+	poll := func() {
+		f, err := os.Open(path)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		if _, err := f.Seek(off, 0); err != nil {
+			return
+		}
+		buf := make([]byte, 64*1024)
+		for {
+			n, _ := f.Read(buf)
+			if n <= 0 {
+				return
+			}
+			off += int64(n)
+			emit(string(buf[:n]))
+		}
+	}
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
 	for {
 		select {
 		case <-stop:
+			poll() // final drain so late lines are not lost
 			return
 		case <-t.C:
-			f, err := os.Open(path)
-			if err != nil {
-				continue
-			}
-			if _, err := f.Seek(off, 0); err != nil {
-				f.Close()
-				continue
-			}
-			buf := make([]byte, 64*1024)
-			n, _ := f.Read(buf)
-			if n > 0 {
-				off += int64(n)
-				for _, line := range strings.Split(strings.TrimRight(string(buf[:n]), "\n"), "\n") {
-					if s := strings.TrimSpace(line); s != "" {
-						logger.Info("guest: " + s)
-					}
-				}
-			}
-			f.Close()
+			poll()
 		}
 	}
 }

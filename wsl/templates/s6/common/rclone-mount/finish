@@ -1,0 +1,4 @@
+#!/bin/sh
+# Pace restarts: rclone exits CRITICAL (no self-retry) while the host
+# server is down; without this s6-supervise respawns every second.
+sleep 5

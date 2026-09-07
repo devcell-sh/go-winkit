@@ -77,25 +77,37 @@ const (
 	// every boot, and the drive is visible globally — including to WSL1
 	// drvfs, the whole point of the fixed-disk mount.
 	RcloneMountTaskName = "winkit-rclone-mount"
+
+	// DefaultGuestHostIP is the host address under QEMU user-mode
+	// networking (slirp).
+	DefaultGuestHostIP = "10.0.2.2"
+	// DefaultSFTPUser / DefaultSFTPPassword / DefaultSFTPVolumeName /
+	// DefaultSFTPDrive fill the share fields when only the port is set.
+	// Shared with build callers that need the resolved values before
+	// render time (e.g. to bake wsl.RcloneMountService).
+	DefaultSFTPUser       = "winkit"
+	DefaultSFTPPassword   = "winkit"
+	DefaultSFTPVolumeName = "winkit"
+	DefaultSFTPDrive      = "W"
 )
 
 // GenerateBootstrapScript renders the first-logon bootstrap for a config.
 func GenerateBootstrapScript(cfg Config) []byte {
 	if cfg.GuestHostIP == "" {
-		cfg.GuestHostIP = "10.0.2.2"
+		cfg.GuestHostIP = DefaultGuestHostIP
 	}
 	if cfg.SFTPPort > 0 {
 		if cfg.SFTPUser == "" {
-			cfg.SFTPUser = "winkit"
+			cfg.SFTPUser = DefaultSFTPUser
 		}
 		if cfg.SFTPPassword == "" {
-			cfg.SFTPPassword = "winkit"
+			cfg.SFTPPassword = DefaultSFTPPassword
 		}
 		if cfg.SFTPVolumeName == "" {
-			cfg.SFTPVolumeName = "winkit"
+			cfg.SFTPVolumeName = DefaultSFTPVolumeName
 		}
 		if cfg.SFTPDrive == "" {
-			cfg.SFTPDrive = "W"
+			cfg.SFTPDrive = DefaultSFTPDrive
 		}
 	}
 	return []byte(templates.Render("bootstrap.ps1.tmpl", cfg))

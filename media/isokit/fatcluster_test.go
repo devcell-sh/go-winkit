@@ -30,7 +30,7 @@ func TestFATClusterBytes(t *testing.T) {
 	}
 }
 
-// TestCreateFATImagePaddedLargeVolume reproduces the wsl2 answer-volume bug: a
+// TestCreateFATImagePaddedLargeVolume reproduces the wsl answer-volume bug: a
 // payload past 260MB makes go-diskfs format 4KB clusters, so a file that is a
 // multiple of the old fixed 2048 pad but NOT of 4096 (14336 bytes) used to be
 // read back cluster-rounded (16384) and corrupted. Cluster-aware padding fixes

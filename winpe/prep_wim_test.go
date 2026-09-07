@@ -12,20 +12,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testFeatureOps is a neutral two-feature fixture for the script tests;
+// the generator is feature-agnostic, so any DISM feature names exercise it.
+func testFeatureOps() []WimPrepOp {
+	return []WimPrepOp{{Feature: "NetFx3"}, {Feature: "TelnetClient"}}
+}
+
 func TestGenerateWimBuilderScript_ContainsAllOps(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops: append(HyperVPrepOps(), OpenSSHPrepOps()...),
+		Ops: append(testFeatureOps(), OpenSSHPrepOps()...),
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
 	// Must contain DISM commands for each feature/capability.
-	assert.Contains(t, script, "Microsoft-Hyper-V")
-	assert.Contains(t, script, "VirtualMachinePlatform")
+	assert.Contains(t, script, "NetFx3")
+	assert.Contains(t, script, "TelnetClient")
 	assert.Contains(t, script, "OpenSSH.Server~~~~0.0.1.0")
 	assert.Contains(t, script, "OpenSSH.Client~~~~0.0.1.0")
 
 	// Feature ops use /Enable-Feature, capability ops use /Add-Capability.
-	assert.Contains(t, script, "/Enable-Feature /FeatureName:Microsoft-Hyper-V")
+	assert.Contains(t, script, "/Enable-Feature /FeatureName:NetFx3")
 	assert.Contains(t, script, "/Add-Capability /CapabilityName:OpenSSH.Server")
 
 	// Must use offline servicing (/Image:) not /Online.
@@ -72,7 +78,7 @@ func TestGenerateWimBuilderScript_PackageOp(t *testing.T) {
 
 func TestGenerateWimBuilderScript_CRLFLineEndings(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops: HyperVPrepOps(),
+		Ops: testFeatureOps(),
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 	lines := strings.Split(script, "\n")
@@ -87,7 +93,7 @@ func TestGenerateWimBuilderScript_CRLFLineEndings(t *testing.T) {
 
 func TestGenerateWimBuilderScript_ErrorHandling(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops: HyperVPrepOps(),
+		Ops: testFeatureOps(),
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
@@ -124,7 +130,7 @@ func TestGenerateWimBuilderScript_InternetCheckAndCapabilityRetry(t *testing.T) 
 
 func TestGenerateWimBuilderScript_DiskpartWorkVolume(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops: HyperVPrepOps(),
+		Ops: testFeatureOps(),
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
@@ -132,28 +138,6 @@ func TestGenerateWimBuilderScript_DiskpartWorkVolume(t *testing.T) {
 	assert.Contains(t, script, "format fs=ntfs quick")
 	assert.Contains(t, script, "assign letter=W")
 	assert.Contains(t, script, "diskpart failed")
-}
-
-func TestHyperVPrepOps(t *testing.T) {
-	ops := HyperVPrepOps()
-	require.Len(t, ops, 2)
-	assert.Equal(t, "Microsoft-Hyper-V", ops[0].Feature)
-	assert.Equal(t, "VirtualMachinePlatform", ops[1].Feature)
-}
-
-func TestWSL2PrepOps(t *testing.T) {
-	ops := WSL2PrepOps()
-	require.Len(t, ops, 1)
-	assert.Equal(t, "Microsoft-Windows-Subsystem-Linux", ops[0].Feature)
-}
-
-func TestGenerateWimBuilderScript_WSL2Feature(t *testing.T) {
-	cfg := WimPrepConfig{
-		Ops: append(HyperVPrepOps(), WSL2PrepOps()...),
-	}
-	script := string(GenerateWimBuilderScript(cfg))
-	assert.Contains(t, script, "Microsoft-Windows-Subsystem-Linux")
-	assert.Contains(t, script, "/Enable-Feature /FeatureName:Microsoft-Windows-Subsystem-Linux")
 }
 
 func TestOpenSSHPrepOps(t *testing.T) {
@@ -261,7 +245,7 @@ func TestGenerateWimBuilderScript_DriversOnly_NoInstallWimMount(t *testing.T) {
 
 func TestGenerateWimBuilderScript_InstallWimUnmountSkippedByDefault(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops: HyperVPrepOps(),
+		Ops: testFeatureOps(),
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
@@ -273,7 +257,7 @@ func TestGenerateWimBuilderScript_InstallWimUnmountSkippedByDefault(t *testing.T
 
 func TestGenerateWimBuilderScript_InstallWimUnmountExplicit(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops:               HyperVPrepOps(),
+		Ops:               testFeatureOps(),
 		UnmountInstallWim: true,
 	}
 	script := string(GenerateWimBuilderScript(cfg))
@@ -285,16 +269,16 @@ func TestGenerateWimBuilderScript_InstallWimUnmountExplicit(t *testing.T) {
 
 func TestGenerateWimBuilderScript_FeatureDiscovery(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops: HyperVPrepOps(),
+		Ops: testFeatureOps(),
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
 	// The template must discover backing packages for each Feature op
 	// by running Get-FeatureInfo on install.wim BEFORE Enable-Feature.
-	assert.Contains(t, script, "/Get-FeatureInfo /FeatureName:Microsoft-Hyper-V",
-		"must discover backing packages for Microsoft-Hyper-V")
-	assert.Contains(t, script, "/Get-FeatureInfo /FeatureName:VirtualMachinePlatform",
-		"must discover backing packages for VirtualMachinePlatform")
+	assert.Contains(t, script, "/Get-FeatureInfo /FeatureName:NetFx3",
+		"must discover backing packages for NetFx3")
+	assert.Contains(t, script, "/Get-FeatureInfo /FeatureName:TelnetClient",
+		"must discover backing packages for TelnetClient")
 
 	// Discovery must target install.wim (the source), not boot.wim.
 	discoveryIdx := strings.Index(script, "/Get-FeatureInfo")
@@ -305,7 +289,7 @@ func TestGenerateWimBuilderScript_FeatureDiscovery(t *testing.T) {
 
 func TestGenerateWimBuilderScript_FeaturePackageImport(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops: HyperVPrepOps(),
+		Ops: testFeatureOps(),
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
@@ -325,7 +309,7 @@ func TestGenerateWimBuilderScript_FeaturePackageImport(t *testing.T) {
 
 func TestGenerateWimBuilderScript_FeatureDiscoveryJSONL(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops: HyperVPrepOps(),
+		Ops: testFeatureOps(),
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
@@ -347,11 +331,11 @@ func TestGenerateWimBuilderScript_DriverOpVerifiesDrivers(t *testing.T) {
 
 func TestGenerateWimBuilderScript_MixedOps(t *testing.T) {
 	cfg := WimPrepConfig{
-		Ops: append(HyperVPrepOps(), VirtIODriverPrepOps()...),
+		Ops: append(testFeatureOps(), VirtIODriverPrepOps()...),
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	assert.Contains(t, script, "/Enable-Feature /FeatureName:Microsoft-Hyper-V")
+	assert.Contains(t, script, "/Enable-Feature /FeatureName:NetFx3")
 	assert.Contains(t, script, `/Add-Driver /Driver:"$VirtIO\NetKVM\w11\ARM64" /Recurse`)
 	assert.Contains(t, script, `/Add-Driver /Driver:"$VirtIO\vioserial\w11\ARM64" /Recurse`)
 	assert.Contains(t, script, `/Add-Driver /Driver:"$VirtIO\vioscsi\w11\ARM64" /Recurse`)
@@ -551,20 +535,4 @@ func TestWimBuilderScriptCommand(t *testing.T) {
 	cmd := WimBuilderScriptCommand()
 	assert.Contains(t, cmd, WimBuilderScriptName)
 	assert.Contains(t, cmd, "$WinkitVol")
-}
-
-// The VMP transplant is host-side work, not a DISM op: DISM cannot enable
-// VirtualMachinePlatform in a WinPE image at all (CBS parent-package gate).
-func TestWimPrepConfig_TransplantVMPDefaultsOff(t *testing.T) {
-	var cfg WimPrepConfig
-	assert.False(t, cfg.TransplantVMP,
-		"transplant must be opt-in so existing pipelines are unaffected")
-}
-
-func TestWimPrepConfig_TransplantVMPIsNotADismOp(t *testing.T) {
-	cfg := WimPrepConfig{Ops: VirtIODriverPrepOps(), TransplantVMP: true}
-	script := string(GenerateWimBuilderScript(cfg))
-
-	assert.NotContains(t, script, "VirtualMachinePlatform",
-		"the transplant must not emit DISM feature commands into the builder script")
 }

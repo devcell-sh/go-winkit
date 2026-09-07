@@ -62,13 +62,11 @@ func TestWimBuilder(t *testing.T) {
 			runner := NewRunner(qemuBin, qemuAccel)
 
 			// Driver-only profile — the proven "boot-wim" scope.
-			// DISM cannot enable Hyper-V/VMP/WSL in a WinPE image at all
-			// (CBS 0x800f080c: those packages parent
+			// Inbox optional features cannot be DISM-enabled in a WinPE
+			// image (CBS 0x800f080c: their packages parent
 			// Microsoft-Windows-Foundation-Package while boot.wim's is
-			// Microsoft-Windows-WinPE-Package); that path is the host-side
-			// VMP transplant, covered by TestVMPVerify. OpenSSH
-			// capabilities need Windows Update and the builder VM has no
-			// route out.
+			// Microsoft-Windows-WinPE-Package). OpenSSH capabilities need
+			// Windows Update and the builder VM has no route out.
 			cfg := winpe.RunConfig{
 				Build: winpe.BuildConfig{
 					WindowsISO:   winISO,
@@ -159,10 +157,10 @@ func verifyDevcellWim(t *testing.T, wimData []byte, agentOut, outDir string) {
 	require.NoError(t, os.MkdirAll(extractDir, 0755))
 	require.NoError(t, wim.ExtractImage(2, extractDir, nil))
 
-	// Hyper-V/VMP/WSL cannot be DISM-enabled in a WinPE image (CBS parent
-	// package mismatch) — that's the VMP transplant's job, verified by
-	// TestVMPVerify. OpenSSH capabilities need Windows Update access the
-	// builder VM doesn't have. This test verifies the DISM driver path.
+	// Inbox optional features cannot be DISM-enabled in a WinPE image (CBS
+	// parent package mismatch). OpenSSH capabilities need Windows Update
+	// access the builder VM doesn't have. This test verifies the DISM
+	// driver path.
 
 	// VirtIO drivers in DriverStore.
 	assert.Contains(t, agentOut, `OK: Add-Driver NetKVM\w11\ARM64`)
@@ -322,185 +320,13 @@ func TestQcowBuilder(t *testing.T) {
 		}
 	})
 
-	// vmp: take the prebuilt base image, transplant the VirtualMachinePlatform
-	// stack into its boot.wim, repack a qcow2, boot it, and verify the
-	// hypervisor services are registered via SSH.
-	//
-	//	go test -tags 'wimlib integration' -run TestQcowBuilder/vmp -timeout 20m -v ./winpe/qemu/
-	t.Run("vmp", func(t *testing.T) {
-		prebuiltImg := filepath.Join("..", "..", "test", "testdata", "winpe-base.qcow2")
-		if _, err := os.Stat(prebuiltImg); err != nil {
-			t.Skip("winpe-base.qcow2 not in testdata")
-		}
-
-		installWim := requireInstallWim(t)
-		regExport := requireVMPRegExport(t)
-
-		outDir := testutil.ResultDir(t)
-		t.Logf("results: %s", outDir)
-
-		// 1. Read boot volume files from the prebuilt image.
-		bootVolumePaths := []string{
-			"/sources/boot.wim",
-			"/EFI/BOOT/BOOTAA64.EFI",
-			"/EFI/Microsoft/Boot/BCD",
-			"/boot/bcd",
-			"/boot/boot.sdi",
-		}
-		files := make(map[string][]byte)
-		for _, p := range bootVolumePaths {
-			data, err := ReadFileFromFATQcow2(prebuiltImg, p)
-			require.NoError(t, err, "reading %s from prebuilt image", p)
-			files[p] = data
-			t.Logf("read %s: %d bytes", p, len(data))
-		}
-
-		// Also read gosshd and the winkit payload (injected into boot.wim,
-		// so they survive the transplant). The drivers are inside boot.wim
-		// too, so they also survive.
-
-		// 2. Write boot.wim to disk and transplant VMP.
-		bootWimPath := filepath.Join(outDir, "boot.wim")
-		require.NoError(t, os.WriteFile(bootWimPath, files["/sources/boot.wim"], 0o644))
-
-		t.Log("transplanting VMP into boot.wim")
-		err := winpe.TransplantVMPIntoBootWim(bootWimPath, installWim, regExport)
-		if err != nil {
-			t.Skipf("VMP transplant failed (donor may lack materialized binaries): %v", err)
-		}
-
-		transplanted, err := os.ReadFile(bootWimPath)
-		require.NoError(t, err)
-		files["/sources/boot.wim"] = transplanted
-		t.Logf("boot.wim after VMP transplant: %d bytes (%.1f MB)",
-			len(transplanted), float64(len(transplanted))/(1024*1024))
-
-		// 3. Repack the qcow2.
-		img := filepath.Join(outDir, "winpe-vmp.qcow2")
-		require.NoError(t, CreateFATQcow2(img, files, 4*1024*1024*1024))
-		files = nil
-
-		// 4. Boot it.
-		diskPath := filepath.Join(outDir, "scratch.qcow2")
-		require.NoError(t, CreateDisk(diskPath, 8))
-		fwPath := FirmwarePath()
-		require.NotEmpty(t, fwPath, "no UEFI firmware found")
-		varsPath := filepath.Join(outDir, "vars.fd")
-		require.NoError(t, PrepareVarsFile(fwPath, varsPath))
-
-		sshPort := freeTCPPort(t)
-		spec := Spec{
-			VMName:                 "winkit-qcow-vmp-test",
-			CPUs:                   2,
-			MemoryGB:               2,
-			DiskPath:               diskPath,
-			FirmwarePath:           fwPath,
-			VarsPath:               varsPath,
-			QMPSocketDir:           outDir,
-			DisplayType:            "none",
-			Accel:                  "tcg,thread=multi",
-			SerialLogPath:          filepath.Join(outDir, "serial.log"),
-			GuestStructuredLogPath: filepath.Join(outDir, "build.jsonl"),
-			NoReboot:               true,
-			SSHPort:                sshPort,
-		}
-		spec.ApplyDefaults()
-		require.NoError(t, spec.Validate())
-
-		argv := BuildQcowBootArgv(spec, img)
-		argv[0] = qemuBin
-		require.NoError(t, EnsureScreenshotDir(outDir, ScreenSourceQMP))
-
-		t.Logf("QEMU argv: %s", strings.Join(argv, " "))
-		cmd := exec.Command(argv[0], argv[1:]...)
-		require.NoError(t, cmd.Start(), "starting QEMU")
-		qemuDone := make(chan struct{})
-		go func() { cmd.Wait(); close(qemuDone) }()
-		defer func() {
-			QMPQuit(QMPSocketPath(spec))
-			select {
-			case <-qemuDone:
-			case <-time.After(15 * time.Second):
-				cmd.Process.Kill()
-				<-qemuDone
-			}
-		}()
-
-		// 5. Poll SSH.
-		addr := fmt.Sprintf("127.0.0.1:%d", sshPort)
-		deadline := time.Now().Add(12 * time.Minute)
-		var client *gosshd.Client
-		seq := 0
-		for time.Now().Before(deadline) {
-			select {
-			case <-qemuDone:
-				serialLog, _ := os.ReadFile(filepath.Join(outDir, "serial.log"))
-				t.Fatalf("QEMU exited before gosshd answered\nserial.log:\n%s", string(serialLog))
-			default:
-			}
-			seq++
-			ppm := ScreenshotPath(outDir, ScreenSourceQMP, time.Now(), "none", seq, seq, "ppm")
-			QMPScreendump(QMPSocketPath(spec), ppm)
-
-			dialCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			client, err = gosshd.Dial(dialCtx, addr)
-			cancel()
-			if err == nil {
-				break
-			}
-			t.Logf("poll %d: SSH not ready yet: %v", seq, err)
-			time.Sleep(10 * time.Second)
-		}
-		require.NotNil(t, client, "gosshd never answered on %s: %v", addr, err)
-		defer client.Close()
-		t.Logf("gosshd answered on %s", addr)
-
-		// 6. Verify hypervisor services are registered.
-		stdout, _, code, err := client.Run(context.Background(), "echo WINKIT_VMP_OK")
-		require.NoError(t, err, "running command over SSH")
-		assert.Equal(t, 0, code, "guest command exit code")
-		assert.Contains(t, string(stdout), "WINKIT_VMP_OK")
-
-		// Check that the VMP service keys exist in the guest registry.
-		// vmcompute (the HCS entrypoint) and hvservice (the hypervisor
-		// driver) are the VMP stack proper and are required. vmms is the
-		// Hyper-V management service: it is NOT part of VMP — the reference
-		// data comes from a VMP-only machine with every Hyper-V feature
-		// disabled, so no vmms service key exists to inject. Its binary is
-		// transplanted opportunistically (screenshots via WMI), but its
-		// registration is best-effort and must not fail the VMP gate. See
-		// winpe.VMMSExtraFiles.
-		requiredSvcs := map[string]bool{"vmcompute": true, "hvservice": true, "vmms": false}
-		for _, svc := range []string{"vmcompute", "vmms", "hvservice"} {
-			stdout, _, code, err = client.Run(context.Background(),
-				fmt.Sprintf("reg query HKLM\\SYSTEM\\CurrentControlSet\\Services\\%s /v ImagePath", svc))
-			if err == nil && code == 0 {
-				t.Logf("VMP service %s: registered (ImagePath found)", svc)
-				assert.Contains(t, strings.ToLower(string(stdout)), "imagepath",
-					"%s must have an ImagePath", svc)
-			} else if requiredSvcs[svc] {
-				t.Errorf("VMP service %s: NOT registered (err=%v code=%d)", svc, err, code)
-			} else {
-				t.Logf("VMP service %s: not registered (err=%v code=%d) — beyond-VMP, expected absent from VMP-only reference data", svc, err, code)
-			}
-		}
-
-		stdout, _, code, err = client.Run(context.Background(), "driverquery")
-		if err == nil && code == 0 {
-			t.Logf("driverquery output:\n%s", string(stdout))
-		}
-	})
-
 	// interactive: boot the prebuilt image and hold the SSH session open until
 	// the test times out. Use from the LLM session to test changes via SSH:
 	//
 	//	go test -tags 'wimlib integration' -run TestQcowBuilder/interactive -timeout 60m -v ./winpe/qemu/
 	t.Run("interactive", func(t *testing.T) {
-		// WINKIT_INTERACTIVE_IMAGE overrides which prebuilt qcow2 to boot,
-		// e.g. test/testdata/winpe-hpv.qcow2 to drive the hypervisor stack
-		// (VMP + hypervisorlaunchtype=Auto) over SSH. Defaults to the base
-		// image. An hpv image boots ~10x slower (the hypervisor engages), so
-		// raise -timeout accordingly.
+		// WINKIT_INTERACTIVE_IMAGE overrides which prebuilt qcow2 to boot;
+		// defaults to the base image.
 		prebuiltImg := filepath.Join("..", "..", "test", "testdata", "winpe-base.qcow2")
 		if p := os.Getenv("WINKIT_INTERACTIVE_IMAGE"); p != "" {
 			prebuiltImg = p
@@ -547,27 +373,6 @@ func TestQcowBuilder(t *testing.T) {
 			NoReboot:               true,
 			SSHPort:                sshPort,
 		}
-		// WINKIT_INTERACTIVE_SECURE=1 boots the proven EL3/secure-world machine
-		// (secure=on + GICv3/ITS + neoverse-n1 + kernel-loaded firmware) that
-		// CELL-456 showed is REQUIRED for Windows' own hypervisor to
-		// actually launch — on plain `virt`, HypervisorPresent is a spoof and
-		// every HCS call fails. Uses the in-tree kernel firmware.
-		if os.Getenv("WINKIT_INTERACTIVE_SECURE") == "1" {
-			kfw := filepath.Join("..", "..", "test", "testdata", "QEMU_EFI.kernel.fd")
-			require.FileExists(t, kfw, "secure machine needs the kernel-type EDK2 firmware")
-			spec.MachineType = "virt,virtualization=on,gic-version=3,its=on,secure=on"
-			spec.CPU = "neoverse-n1"
-			spec.FirmwarePath = kfw
-			spec.FirmwareKernel = true
-			spec.VarsPath = "" // -kernel mode has no NVRAM store
-			// The first-boot hook engages hypervisorlaunchtype with an in-guest
-			// bcdedit + reboot; the offline BCD write alone is not honored. With
-			// NoReboot=true that reboot exits qemu, so the enabled boot never
-			// happens. Keep qemu alive across the guest reset so boot-2 comes up
-			// with the flag active on the secure machine.
-			spec.NoReboot = false
-			t.Logf("secure/EL3 machine: %s -cpu %s -kernel %s (NoReboot=false)", spec.MachineType, spec.CPU, kfw)
-		}
 		spec.ApplyDefaults()
 		require.NoError(t, spec.Validate())
 
@@ -589,9 +394,9 @@ func TestQcowBuilder(t *testing.T) {
 			}
 		}()
 
-		// Wait for SSH to come up, screenshotting for evidence. The hpv
-		// image boots ~10x slower because the hypervisor engages under TCG,
-		// so give an overridden image a much longer window.
+		// Wait for SSH to come up, screenshotting for evidence. An
+		// overridden image may boot much slower under TCG, so give it a
+		// longer window.
 		sshWait := 12 * time.Minute
 		if os.Getenv("WINKIT_INTERACTIVE_IMAGE") != "" {
 			sshWait = 25 * time.Minute
@@ -821,102 +626,6 @@ func freeTCPPort(t *testing.T) uint16 {
 	return uint16(l.Addr().(*net.TCPAddr).Port)
 }
 
-func TestVMPVerify(t *testing.T) {
-	if testing.Short() {
-		t.Skip("long: two-pass VMP transplant + verify")
-	}
-
-	qemuBin := requireQEMUBin(t)
-	winISO := requireWindowsISO(t)
-	virtioISO := requireVirtioISO(t)
-	pwshFiles := requirePwshFiles(t)
-
-	for _, accel := range []string{"tcg"} {
-		t.Run(accel, func(t *testing.T) {
-			outDir := testutil.ResultDir(t)
-			qemuAccel := "tcg,thread=multi"
-			t.Logf("results: %s", outDir)
-
-			runner := NewRunner(qemuBin, qemuAccel)
-
-			// Pass 1: build winkit.wim with VMP transplant
-			var artifact []byte
-			if p := os.Getenv("WINKIT_VMP_ARTIFACT"); p != "" {
-				data, err := os.ReadFile(p)
-				require.NoError(t, err, "reading WINKIT_VMP_ARTIFACT")
-				artifact = data
-				t.Logf("reusing artifact %s (%d bytes)", p, len(data))
-			}
-
-			t.Run("pass1-build", func(t *testing.T) {
-				if artifact != nil {
-					t.Skip("using WINKIT_VMP_ARTIFACT; skipping build")
-				}
-
-				cfg := winpe.RunConfig{
-					Build: winpe.BuildConfig{
-						WindowsISO:   winISO,
-						VirtIOISO:    virtioISO,
-						PwshFiles:    pwshFiles,
-						OutputDir:    filepath.Join(outDir, "pass1"),
-						HyperV:       true,
-						WSL2:         true,
-						VirtIO:       true,
-						ProgressPort: `\\.\Global\` + ProgressPortName,
-					},
-					PollInterval: 15 * time.Second,
-					Timeout:      45 * time.Minute,
-				}
-
-				ctx, cancel := context.WithTimeout(context.Background(), 50*time.Minute)
-				defer cancel()
-
-				result, err := winpe.Run(ctx, runner, cfg)
-				require.NoError(t, err, "pass 1 must produce winkit.wim")
-				require.NotEmpty(t, result.DevcellWim)
-
-				artifact = result.DevcellWim
-				t.Logf("winkit.wim: %d bytes (%.1f MB)",
-					len(artifact), float64(len(artifact))/(1024*1024))
-
-				saved := filepath.Join(outDir, "winkit.wim")
-				os.WriteFile(saved, artifact, 0644)
-				t.Logf("artifact saved: %s", saved)
-			})
-
-			require.NotEmpty(t, artifact, "pass 1 must produce winkit.wim")
-
-			// Pass 2: boot from the WIM and verify VMP services
-			t.Run("pass2-verify", func(t *testing.T) {
-				verifyFiles := map[string][]byte{
-					"/" + winpe.VMPVerifyScriptName: winpe.GenerateVMPVerifyScript(),
-				}
-
-				cfg := winpe.RunConfig{
-					Build: winpe.BuildConfig{
-						WindowsISO:   winISO,
-						VirtIOISO:    virtioISO,
-						PwshFiles:    pwshFiles,
-						OutputDir:    filepath.Join(outDir, "pass2"),
-						HyperV:       true,
-						VirtIO:       true,
-						ProgressPort: `\\.\Global\` + ProgressPortName,
-					},
-					PollInterval: 15 * time.Second,
-					Timeout:      30 * time.Minute,
-				}
-				_ = verifyFiles
-				_ = cfg
-
-				// TODO: boot from artifact using the VMP verify script
-				// as the agent command. Requires support for booting from
-				// a custom WIM (wimSourceOverride pattern).
-				t.Skip("pass2 requires WIM boot-from support (CELL-489 follow-up)")
-			})
-		})
-	}
-}
-
 // Test helpers: resolve prerequisites, skip when missing.
 
 func requireQEMUBin(t *testing.T) string {
@@ -977,24 +686,6 @@ func requirePwshFiles(t *testing.T) map[string][]byte {
 	}
 	require.NotEmpty(t, files, "pwsh zip contained no files")
 	return files
-}
-
-func requireInstallWim(t *testing.T) string {
-	t.Helper()
-	p := filepath.Join(cache.Dir(), "mct-work", "iso-stage", "sources", "install.wim")
-	if _, err := os.Stat(p); err != nil {
-		t.Skipf("install.wim not available at %s (run: winkit fetch --source mct)", p)
-	}
-	return p
-}
-
-func requireVMPRegExport(t *testing.T) string {
-	t.Helper()
-	p := filepath.Join("..", "testdata", "vmp-services.reg")
-	if _, err := os.Stat(p); err != nil {
-		t.Skipf("vmp-services.reg not available at %s", p)
-	}
-	return p
 }
 
 // LookPath finds a QEMU binary, checking nix profile paths first.

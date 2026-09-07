@@ -47,8 +47,6 @@ func newWinPERunCmd() *cobra.Command {
 					WindowsISO: isoPath,
 					VirtIOISO:  virtioISO,
 					OutputDir:  outputDir,
-					HyperV:     true,
-					WSL2:       true,
 					OpenSSH:    true,
 					VirtIO:     true,
 				},

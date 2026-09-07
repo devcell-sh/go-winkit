@@ -58,15 +58,6 @@ type WimPrepConfig struct {
 	// read-only and the WinPE VM is discarded after the build, so an
 	// explicit unmount just burns wall-clock (15 min on TCG/ARM64).
 	UnmountInstallWim bool
-
-	// TransplantVMP requests the VirtualMachinePlatform transplant on the
-	// host, before the builder VM boots. It produces no DISM commands:
-	// DISM cannot enable VMP in a WinPE image at all, because every backing
-	// package names Microsoft-Windows-Foundation-Package as its parent while
-	// boot.wim's is Microsoft-Windows-WinPE-Package, so CBS refuses both
-	// /Add-Package and /Enable-Feature. The transplant copies the signed
-	// binaries in and clones the service keys instead.
-	TransplantVMP bool
 }
 
 const (
@@ -162,25 +153,6 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	out := templates.Render("wim-builder.ps1.tmpl", data)
 	out = strings.ReplaceAll(out, "\n", "\r\n")
 	return []byte(out)
-}
-
-// HyperVPrepOps returns the servicing operations to enable Hyper-V in a
-// boot.wim. This is the minimum set needed for vmms.exe, vmwp.exe,
-// vmcompute.exe, Vid.sys, and the full hypervisor host stack.
-func HyperVPrepOps() []WimPrepOp {
-	return []WimPrepOp{
-		{Feature: "Microsoft-Hyper-V"},
-		{Feature: "VirtualMachinePlatform"},
-	}
-}
-
-// WSL2PrepOps returns the servicing operations to enable WSL2 in a boot.wim.
-// Requires Hyper-V (HyperVPrepOps) as a prerequisite — VirtualMachinePlatform
-// is included there.
-func WSL2PrepOps() []WimPrepOp {
-	return []WimPrepOp{
-		{Feature: "Microsoft-Windows-Subsystem-Linux"},
-	}
 }
 
 // OpenSSHPrepOps returns the servicing operations to add OpenSSH to a

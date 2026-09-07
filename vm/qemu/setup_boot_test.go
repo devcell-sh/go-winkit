@@ -7,22 +7,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestBuildSetupBootArgv asserts the wsl2 full-install boot shape: the FAT
+// TestBuildSetupBootArgv asserts the wsl full-install boot shape: the FAT
 // Setup boot volume is booted (bootindex=1), the Windows ISO is attached only
 // as a readable USB CD (NOT booted via El Torito, which ASSERTs on
 // Linux-hosted EDK2), and the answer + virtio volumes ride along.
 func TestBuildSetupBootArgv(t *testing.T) {
 	spec := testSpec()
-	spec.DiskPath = "/tmp/wsl2.qcow2" // the empty NVMe target (bootindex=0)
+	spec.DiskPath = "/tmp/wsl.qcow2" // the empty NVMe target (bootindex=0)
 	spec.VirtIOISO = "/tmp/virtio-win.iso"
 	spec.SSHPort = 20022
 	spec.RDPPort = 23389
 
-	argv := BuildSetupBootArgv(spec, "/tmp/wsl2-boot.qcow2", "/tmp/windows.iso", "/tmp/autounattend.img")
+	argv := BuildSetupBootArgv(spec, "/tmp/wsl-boot.qcow2", "/tmp/windows.iso", "/tmp/autounattend.img")
 	joined := strings.Join(argv, " ")
 
 	// Boot volume: qcow2 FAT ESP, usb-storage, bootindex=1.
-	assert.Contains(t, joined, "file=/tmp/wsl2-boot.qcow2,format=qcow2,if=none,id=usbfat0")
+	assert.Contains(t, joined, "file=/tmp/wsl-boot.qcow2,format=qcow2,if=none,id=usbfat0")
 	assert.Contains(t, joined, "usb-storage,drive=usbfat0,removable=true,bus="+USBBusID+".0,bootindex=1")
 
 	// NVMe target is booted first (bootindex=0) and falls through when empty.

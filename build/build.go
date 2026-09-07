@@ -10,10 +10,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/devcell-sh/go-wimlib"
 	"github.com/devcell-sh/go-winkit/build/buildopts"
 	"github.com/devcell-sh/go-winkit/s6"
+	"github.com/devcell-sh/go-winkit/winpe"
 )
 
 // wimlibAvailable is a seam for tests; the binding's answer is fixed at
@@ -86,4 +88,13 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0o644)
+}
+
+// MergeGuestLog appends the raw guest event stream (workDir/guest.jsonl,
+// written by the QEMU process during the build) into dst, which callers
+// point at their unified build.jsonl. Two processes cannot share one
+// append stream while the VM runs, so the merge happens after the build;
+// events carry their own timestamps, so ordering is recoverable.
+func MergeGuestLog(dst io.Writer, workDir string) error {
+	return winpe.AppendStreamJSONL(dst, filepath.Join(workDir, "guest.jsonl"), "guest")
 }

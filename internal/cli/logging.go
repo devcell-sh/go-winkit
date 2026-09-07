@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	charmlog "github.com/charmbracelet/log"
+	"github.com/devcell-sh/go-winkit/build"
 	"github.com/devcell-sh/go-winkit/winpe"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -126,6 +127,18 @@ func (u *runUI) AttachLogFile(path string) error {
 		winpe.NewGuestEventHandler(f),
 	))
 	return nil
+}
+
+// MergeGuestLog appends the build's raw guest event stream into the
+// attached log file (see build.MergeGuestLog). No-op when no log file is
+// attached or the stream does not exist.
+func (u *runUI) MergeGuestLog(workDir string) {
+	if u.logFile == nil {
+		return
+	}
+	if err := build.MergeGuestLog(u.logFile, workDir); err != nil {
+		u.Logger.Warn("merging guest.jsonl", "err", err)
+	}
 }
 
 // Finish settles the checklist (marking the in-flight step) and waits

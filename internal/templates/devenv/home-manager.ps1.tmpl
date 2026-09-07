@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Continue'
 $env:WSL_UTF8 = '1'
-# WSL2 automounts Windows drives under /mnt; mount explicitly if it has not.
+# WSL automounts Windows drives under /mnt; mount explicitly if it has not.
 wsl -d {{.Distro}} -u root -- sh -c 'mkdir -p {{.Mount}} && (mountpoint -q {{.Mount}} || mount -t drvfs {{.Drive}} {{.Mount}}) 2>/dev/null; true'
 wsl -d {{.Distro}} -u root -- sh -c 'mkdir -p /home/{{.User}}/dev/dimmkirr && ln -sfn {{.Mount}} /home/{{.User}}/dev/dimmkirr/winkit && chown -h {{.User}} /home/{{.User}}/dev/dimmkirr/winkit 2>/dev/null; true'
 wsl -d {{.Distro}} -- sh -c 'ls /home/{{.User}}/dev/dimmkirr/winkit/nixhome'

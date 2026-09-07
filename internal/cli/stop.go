@@ -12,6 +12,7 @@ import (
 
 	"github.com/devcell-sh/go-winkit/gosshd"
 	"github.com/devcell-sh/go-winkit/vm/vmstate"
+	"github.com/devcell-sh/go-winkit/winpe"
 )
 
 func newStopCmd() *cobra.Command {
@@ -49,7 +50,7 @@ func newStopCmd() *cobra.Command {
 			if !vmstate.IsAlive(st.PID) {
 				fmt.Fprintf(cmd.OutOrStdout(), "VM %q (PID %d) is not running, cleaning up state\n",
 					st.Name, st.PID)
-				return vmstate.Remove(stateDir, st.Name)
+				return removeState(stateDir, st)
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Stopping VM %q (PID %d)\n", st.Name, st.PID)
@@ -59,7 +60,7 @@ func newStopCmd() *cobra.Command {
 					fmt.Fprintln(cmd.OutOrStdout(), "Guest shutting down gracefully")
 					if waitForExit(st.PID, 30*time.Second) {
 						fmt.Fprintln(cmd.OutOrStdout(), "VM stopped")
-						return vmstate.Remove(stateDir, st.Name)
+						return removeState(stateDir, st)
 					}
 					fmt.Fprintln(cmd.ErrOrStderr(), "Graceful shutdown timed out, sending SIGTERM")
 				}
@@ -70,18 +71,41 @@ func newStopCmd() *cobra.Command {
 				_ = p.Signal(syscall.SIGTERM)
 				if waitForExit(st.PID, 10*time.Second) {
 					fmt.Fprintln(cmd.OutOrStdout(), "VM stopped")
-					return vmstate.Remove(stateDir, st.Name)
+					return removeState(stateDir, st)
 				}
 				_ = p.Kill()
 			}
 
 			fmt.Fprintln(cmd.OutOrStdout(), "VM killed")
-			return vmstate.Remove(stateDir, st.Name)
+			return removeState(stateDir, st)
 		},
 	}
 
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "state directory (default ~/.winkit/run/)")
 	return cmd
+}
+
+// removeState finalizes a stopped VM: the run's raw streams — the guest
+// event stream (guest.jsonl), guest progress, and the serial console, all
+// written by the QEMU process — are appended into the unified run.jsonl
+// under their source namespaces, safe now that the VM is gone. Then the
+// registry entry is removed.
+func removeState(stateDir string, st *vmstate.State) error {
+	if st.OutputDir != "" {
+		if dst, err := os.OpenFile(filepath.Join(st.OutputDir, "run.jsonl"),
+			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			for src, ns := range map[string]string{
+				"guest.jsonl":        "guest",
+				"guest-progress.log": "progress",
+				"serial.log":         "serial",
+				"qemu.log":           "qemu",
+			} {
+				_ = winpe.AppendStreamJSONL(dst, filepath.Join(st.OutputDir, src), ns)
+			}
+			dst.Close()
+		}
+	}
+	return vmstate.Remove(stateDir, st.Name)
 }
 
 func resolveOnlyVM(stateDir string) (*vmstate.State, error) {

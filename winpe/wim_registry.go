@@ -98,38 +98,3 @@ func VerifyRegistry(wim *wimlib.WIM, imageNum int, hivePath string, checks []DWo
 	}
 	return nil
 }
-
-// HyperVBootChecks returns the registry value expectations corresponding
-// to HyperVBootPatches. Use with VerifyRegistry to assert patches
-// were applied correctly.
-func HyperVBootChecks() []DWordCheck {
-	return []DWordCheck{
-		{KeyPath: `ControlSet001\Services\hvservice`, ValueName: "Start", Expected: 0, Optional: true},
-		{KeyPath: `ControlSet001\Services\vmbusr`, ValueName: "Start", Expected: 0, Optional: true},
-		{KeyPath: `ControlSet001\Services\vmbus\StartOverride`, ValueName: "0", Expected: 0, Optional: true},
-		{KeyPath: `ControlSet001\Services\HvHost`, ValueName: "Start", Expected: 2, Optional: true},
-		{KeyPath: `ControlSet001\Services\vmcompute`, ValueName: "Start", Expected: 2, Optional: true},
-	}
-}
-
-// HyperVBootPatches returns the registry patches needed to make Hyper-V
-// services start at boot in WinPE. Without these, hvservice has Start=3
-// (Manual) and never loads.
-func HyperVBootPatches() RegistryPatch {
-	return RegistryPatch{
-		HivePath: `\Windows\System32\config\SYSTEM`,
-		Patches: []regedit.DWordPatch{
-			// Kernel drivers — must load at boot (Start=0).
-			// Optional: not every boot.wim ships every service key.
-			{KeyPath: `ControlSet001\Services\hvservice`, ValueName: "Start", Value: 0, Optional: true},
-			{KeyPath: `ControlSet001\Services\vmbusr`, ValueName: "Start", Value: 0, Optional: true},
-
-			// vmbus has Start=0 but StartOverride "0"=3 downgrades it to Manual.
-			{KeyPath: `ControlSet001\Services\vmbus\StartOverride`, ValueName: "0", Value: 0, Optional: true},
-
-			// Win32 services — Auto (2) so SCM starts them in WinPE.
-			{KeyPath: `ControlSet001\Services\HvHost`, ValueName: "Start", Value: 2, Optional: true},
-			{KeyPath: `ControlSet001\Services\vmcompute`, ValueName: "Start", Value: 2, Optional: true},
-		},
-	}
-}

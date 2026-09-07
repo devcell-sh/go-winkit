@@ -18,8 +18,6 @@ type BuildConfig struct {
 	PwshFiles  map[string][]byte
 	OutputDir  string
 
-	HyperV  bool
-	WSL2    bool
 	OpenSSH bool
 	VirtIO  bool
 
@@ -187,12 +185,6 @@ func BuildSetupBootVolumeFiles(winISO, workDir string) (map[string][]byte, error
 
 func (c BuildConfig) wimPrepOps() []WimPrepOp {
 	var ops []WimPrepOp
-	if c.HyperV {
-		ops = append(ops, HyperVPrepOps()...)
-	}
-	if c.WSL2 {
-		ops = append(ops, WSL2PrepOps()...)
-	}
 	if c.OpenSSH {
 		ops = append(ops, OpenSSHPrepOps()...)
 	}

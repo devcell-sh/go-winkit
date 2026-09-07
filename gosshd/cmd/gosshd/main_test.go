@@ -8,7 +8,7 @@ import (
 
 // TestParseArgs pins the flag/positional layout. WinPE callers pass only
 // positionals (log, structured-port) and must keep the default address; the
-// wsl2 provisioning channel passes -addr before the positionals to move off
+// wsl provisioning channel passes -addr before the positionals to move off
 // :22 so it can coexist with the Windows OpenSSH the image ships there.
 func TestParseArgs(t *testing.T) {
 	cases := []struct {
@@ -24,7 +24,7 @@ func TestParseArgs(t *testing.T) {
 		{"winpe positionals", []string{`C:\gosshd.log`, `\\.\Global\winkit.structured.0`},
 			gosshd.DefaultAddr, "cmd", 0, `C:\gosshd.log`, `\\.\Global\winkit.structured.0`},
 		{"addr only", []string{"-addr", ":2222"}, ":2222", "cmd", 0, "", ""},
-		{"wsl2 provisioning: addr+shell then log", []string{"-addr", ":2222", "-shell", "powershell", `C:\gosshd.log`},
+		{"wsl provisioning: addr+shell then log", []string{"-addr", ":2222", "-shell", "powershell", `C:\gosshd.log`},
 			":2222", "powershell", 0, `C:\gosshd.log`, ""},
 		{"log only", []string{`C:\gosshd.log`}, gosshd.DefaultAddr, "cmd", 0, `C:\gosshd.log`, ""},
 		{"vsock port", []string{"-vsock-port", "1024", "-addr", ":2222"},

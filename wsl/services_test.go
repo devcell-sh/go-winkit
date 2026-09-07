@@ -156,6 +156,47 @@ func TestDistroAddServiceOnRecipe(t *testing.T) {
 	}
 }
 
+// TestRcloneMountService: the mount module renders the build-time share
+// parameters into the interop run script and paces restarts via finish.
+func TestRcloneMountService(t *testing.T) {
+	svc, err := RcloneMountService("10.0.2.2", 9844, "winkit", "p'w", "W", "winkit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.Name != "rclone-mount" {
+		t.Errorf("name = %q", svc.Name)
+	}
+	for _, want := range []string{
+		"host=10.0.2.2,port=9844,user=winkit",
+		`'W:'`,
+		`--volname 'winkit'`,
+		"obscure",    // password obscured at exec time
+		`'p'\''w'`,   // shell-quoted password
+		"rclone.exe", // Windows binary via interop
+		"FileSecurity=D:P(A;;FA;;;WD)",
+		"--vfs-cache-mode writes",
+	} {
+		if !strings.Contains(svc.Run, want) {
+			t.Errorf("run missing %q:\n%s", want, svc.Run)
+		}
+	}
+	if strings.Contains(svc.Run, "@") {
+		t.Errorf("unsubstituted token left in run:\n%s", svc.Run)
+	}
+	if finish := string(svc.Files["finish"]); !strings.Contains(finish, "sleep") {
+		t.Errorf("finish must pace restarts, got %q", finish)
+	}
+}
+
+func TestRcloneMountServiceValidatesInputs(t *testing.T) {
+	if _, err := RcloneMountService("", 9844, "u", "p", "W", "v"); err == nil {
+		t.Error("empty host must error")
+	}
+	if _, err := RcloneMountService("h", 0, "u", "p", "W", "v"); err == nil {
+		t.Error("zero port must error")
+	}
+}
+
 func TestDirShareService(t *testing.T) {
 	svc, err := DirShareService([]sftpshare.DirShare{
 		{Drive: "X", VMPath: "/work/src"},

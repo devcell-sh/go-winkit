@@ -15,12 +15,12 @@ func netdevArg(argv []string) string {
 	return ""
 }
 
-// TestApplySSHForward_GuestPortAndOpenSSH locks the wsl2 forwarding shape: the
+// TestApplySSHForward_GuestPortAndOpenSSH locks the wsl forwarding shape: the
 // SSH forward targets the gosshd provisioning guest port (2222), and a separate
 // forward exposes the Windows OpenSSH the image ships on :22. Zero SSHGuestPort
 // must keep the historical :22 target so WinPE/base are unaffected.
 func TestApplySSHForward_GuestPortAndOpenSSH(t *testing.T) {
-	t.Run("wsl2: gosshd guest port + openssh forward", func(t *testing.T) {
+	t.Run("wsl: gosshd guest port + openssh forward", func(t *testing.T) {
 		spec := Spec{SSHPort: 20022, SSHGuestPort: 2222, OpenSSHHostPort: 20122, RDPPort: 23389}
 		nd := netdevArg(applySSHForward(spec, []string{"-netdev", "user,id=net0"}))
 		for _, want := range []string{

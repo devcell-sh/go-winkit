@@ -7,7 +7,7 @@ import (
 
 // TestSessionCommandShell locks the shell selection. cmd (default) preserves the
 // WinPE-safe behavior; powershell passes the request as a single -Command arg so
-// the wsl2 host can send a PowerShell one-liner verbatim (no cmd re-parsing),
+// the wsl host can send a PowerShell one-liner verbatim (no cmd re-parsing),
 // which is why feature-enable over gosshd exited 255 before this existed.
 func TestSessionCommandShell(t *testing.T) {
 	cases := []struct {

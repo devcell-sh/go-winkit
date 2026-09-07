@@ -13,12 +13,6 @@ const (
 	GosshdShellCmdName = "gosshd.cmd"
 	GosshdLogName      = "gosshd.log"
 
-	// HypervisorEnableCmdName is an optional one-time first-boot hook. The
-	// base image never ships it (the `if exist ... call` below is a no-op);
-	// the hpv build injects it to enable the hypervisor via bcdedit on first
-	// boot, because the offline BCD write is not honored by winload.
-	HypervisorEnableCmdName = "hvenable.cmd"
-
 	// GosshdStructuredPort is the guest path of the virtio-serial structured
 	// port gosshd emits per-session records to. It mirrors the device name
 	// wired by the qemu package (winkit.structured.0, backed by build.jsonl);
@@ -155,15 +149,9 @@ func GenerateGosshdShellCmd(driverINFs []string) []byte {
 	for _, inf := range driverINFs {
 		b.WriteString("drvload " + inf + "\r\n")
 	}
-	// Optional first-boot hook (hpv build only): wpeinit above has assigned
-	// drive letters, so the hook can bcdedit the boot volume's BCD store and
-	// reboot. No-op on the base image, which never ships the script.
-	b.WriteString("if exist X:\\winkit\\" + HypervisorEnableCmdName +
-		" call X:\\winkit\\" + HypervisorEnableCmdName + "\r\n")
 	b.WriteString("if exist X:\\winkit\\pwsh\\pwsh.exe set PATH=X:\\winkit\\pwsh;%PATH%\r\n")
-	// Start the Event Log service so in-guest diagnostics — notably the
-	// Microsoft-Windows-Hyper-V-Hypervisor "hypervisor launched" event in the
-	// System log — are queryable via wevtutil. WinPE ships the service
+	// Start the Event Log service so in-guest diagnostics in the System
+	// log are queryable via wevtutil. WinPE ships the service
 	// (Start=auto) but never actually starts it. pwsh is the one shell we can
 	// rely on here (net.exe/sc.exe are not always present).
 	b.WriteString("if exist X:\\winkit\\pwsh\\pwsh.exe X:\\winkit\\pwsh\\pwsh.exe " +

@@ -1,0 +1,26 @@
+#!/bin/sh
+# Mount the host SFTP share as a Windows fixed disk, supervised by the
+# distro's s6 loop via WSL1 interop: the Windows rclone.exe + WinFsp do the
+# mounting (a Linux rclone cannot — WSL1 has no FUSE), while s6-supervise
+# owns restart-on-crash, replacing the winkit-rclone-mount scheduled task
+# and its hand-rolled PowerShell retry loop. The s6 loop runs as SYSTEM
+# (the winkit-s6 boot task's user), so the drive letter is global —
+# visible to all logons and to WSL1 drvfs, the point of the fixed-disk
+# mount (CELL-532).
+# The placeholder tokens are substituted by wsl.RcloneMountService at
+# build time.
+RCLONE="/mnt/c/Program Files/rclone/rclone.exe"
+# First boot: the bootstrap may still be installing WinFsp/rclone.
+while [ ! -e "$RCLONE" ]; do sleep 2; done
+# Connection-string passwords must be rclone-obscured; interop output has
+# CRLF line endings.
+OB=$("$RCLONE" obscure @PASS@ | tr -d '\r\n')
+# --vfs-disk-space-total-size: the host sftpshare has no df; Windows
+# queries free space before every GUI save and aborts on failure.
+# -o FileSecurity: SYSTEM-run WinFsp mounts deny GENERIC_WRITE to other
+# users without an explicit volume ACL.
+exec "$RCLONE" mount ":sftp,host=@HOST@,port=@PORT@,user=@USER@,pass=$OB:/" \
+  '@DRIVE@:' --volname '@VOLNAME@' -o 'FileSecurity=D:P(A;;FA;;;WD)' \
+  --file-perms 0666 --dir-perms 0777 --links --vfs-cache-mode writes \
+  --dir-cache-time 10s --vfs-disk-space-total-size 100G \
+  --log-file 'C:\rclone-mount.log' --log-level INFO 2>&1

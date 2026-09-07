@@ -59,7 +59,7 @@ func TestMultiHandler_FansOutToFileAndDisplay(t *testing.T) {
 
 func TestAttachLogFile_WritesStructuredJSONL(t *testing.T) {
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "host.jsonl")
+	logPath := filepath.Join(dir, "run.jsonl")
 
 	ui := &runUI{Logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), w: &bytes.Buffer{}}
 	require.NoError(t, ui.AttachLogFile(logPath))
