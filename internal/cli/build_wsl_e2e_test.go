@@ -105,18 +105,24 @@ func TestQcowBuilderWSL(t *testing.T) {
 	dest := filepath.Join(outDir, "wsl"+diskExt)
 	t.Logf("artifacts (persist after test): %s", outDir)
 
-	// --- logger → both a file and stderr, so logs survive without -v ---
+	// --- logger → structured JSONL file + human-readable stderr under -v ---
 	logFile, err := os.Create(filepath.Join(outDir, "build-test.log"))
 	if err != nil {
 		t.Fatalf("create log: %v", err)
 	}
 	defer logFile.Close()
+	fileHandler := newGuestEventHandler(logFile)
+	var handler slog.Handler = fileHandler
 	var logW io.Writer = logFile
 	if testing.Verbose() {
+		handler = multiHandler{handlers: []slog.Handler{
+			fileHandler,
+			slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		}}
 		logW = io.MultiWriter(logFile, os.Stderr)
 	}
 	ui := &runUI{
-		Logger: slog.New(slog.NewTextHandler(logW, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Logger: slog.New(handler),
 		w:      logW,
 	}
 
@@ -169,7 +175,7 @@ func TestQcowBuilderWSL(t *testing.T) {
 	// fails: waitForWindowsSSH (whoami), wsl2EnableFeatures (FEATURES-ENABLED),
 	// wslVerify (Hyper-V state Enabled/EnablePending + RDP port reachable).
 	// A nil return therefore means all of those passed.
-	buildErr := buildWSLImage(ctx, dest, cacheDir, winISO, virtioISO, workDir, ui, false, "", resolveNixHome(""))
+	buildErr := buildWSLImage(ctx, dest, cacheDir, winISO, virtioISO, workDir, ui, false, "", resolveNixHome(""), "")
 	close(stopShots)
 	<-shotsDone
 

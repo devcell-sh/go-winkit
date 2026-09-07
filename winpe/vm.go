@@ -50,6 +50,7 @@ type VM interface {
 	Wait() error
 	SSHAddr() string
 	OutputDir() string
+	PID() int
 	// Done returns a channel that is closed when the VM stops or enters an
 	// error state. Callers can select on this to detect unexpected exits.
 	Done() <-chan struct{}

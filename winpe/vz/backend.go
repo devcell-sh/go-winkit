@@ -667,6 +667,9 @@ func (h *vmHandle) SSHAddr() string {
 
 func (h *vmHandle) OutputDir() string { return h.outDir }
 
+// PID returns 0: vz VMs run in-process, not as a child process.
+func (h *vmHandle) PID() int { return os.Getpid() }
+
 // VNCPort returns the port the VNC server is listening on, or 0 if not running.
 func (h *vmHandle) VNCPort() uint16 {
 	if h.vncServer == nil {

@@ -22,14 +22,18 @@ type InstallOptions struct {
 	DiskCacheMode     string
 	StructuredLogPath string
 	Secure            bool
+	DisplayType       string
 }
 
 // RunOptions holds QEMU-specific options for StartRun. Pass as
 // VMRunConfig.BackendExtra.
 type RunOptions struct {
-	FirmwarePath string
-	VarsPath     string
-	Secure       bool
+	FirmwarePath      string
+	VarsPath          string
+	Secure            bool
+	DisplayType       string
+	Detach            bool
+	StructuredLogPath string
 }
 
 // Backend implements winpe.VMBackend using QEMU.
@@ -97,6 +101,7 @@ func (b *Backend) StartInstall(ctx context.Context, cfg winpe.VMInstallConfig) (
 		qcfg.DiskCacheMode = opts.DiskCacheMode
 		qcfg.StructuredLogPath = opts.StructuredLogPath
 		qcfg.Secure = opts.Secure
+		qcfg.DisplayType = opts.DisplayType
 	}
 	vm, err := StartInstall(ctx, qcfg)
 	if err != nil {
@@ -126,6 +131,9 @@ func (b *Backend) StartRun(ctx context.Context, cfg winpe.VMRunConfig) (winpe.VM
 		qcfg.FirmwarePath = opts.FirmwarePath
 		qcfg.VarsPath = opts.VarsPath
 		qcfg.Secure = opts.Secure
+		qcfg.DisplayType = opts.DisplayType
+		qcfg.Detach = opts.Detach
+		qcfg.StructuredLogPath = opts.StructuredLogPath
 	}
 	vm, err := StartRun(ctx, qcfg)
 	if err != nil {
@@ -145,8 +153,9 @@ type vmHandle struct {
 	done    chan struct{}
 }
 
-func (h *vmHandle) SSHAddr() string   { return h.sshAddr }
-func (h *vmHandle) OutputDir() string { return h.InstallVM.OutputDir() }
+func (h *vmHandle) SSHAddr() string      { return h.sshAddr }
+func (h *vmHandle) OutputDir() string    { return h.InstallVM.OutputDir() }
+func (h *vmHandle) PID() int             { return h.InstallVM.PID() }
 func (h *vmHandle) Done() <-chan struct{} { return h.done }
 
 func newVMHandle(vm *InstallVM, sshAddr string) *vmHandle {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -61,6 +62,9 @@ type InstallConfig struct {
 	// neoverse-n1, -kernel firmware). Required for the Hyper-V hypervisor to
 	// actually launch. Implies FirmwareKernel (no pflash NVRAM).
 	Secure bool
+	// DisplayType overrides the QEMU -display flag. Empty defaults to "none".
+	// Set to "vnc=:N" to start a VNC server on port 5900+N.
+	DisplayType string
 }
 
 // InstallVM is a handle to a running Windows install VM.
@@ -79,6 +83,14 @@ func (vm *InstallVM) SerialLog() string { return vm.serialLog }
 
 // OutputDir returns the VM's output directory.
 func (vm *InstallVM) OutputDir() string { return vm.outputDir }
+
+// PID returns the QEMU process ID, or 0 if not started.
+func (vm *InstallVM) PID() int {
+	if vm.cmd.Process != nil {
+		return vm.cmd.Process.Pid
+	}
+	return 0
+}
 
 // Stop kills the QEMU process.
 func (vm *InstallVM) Stop() error {
@@ -126,6 +138,14 @@ type RunConfig struct {
 	// SMBIOSSerial passes -smbios type=1,serial=<value> so a guest startup
 	// script can read it as the dynamic hostname.
 	SMBIOSSerial string
+	// DisplayType overrides the QEMU -display flag. Empty defaults to "none".
+	DisplayType string
+	// Detach runs QEMU in its own process group so it survives the parent's
+	// exit. The caller must track the PID and stop it via QMP or signals.
+	Detach bool
+	// StructuredLogPath, when set, backs the winkit.structured.0 virtio-serial
+	// port with a host-side file so gosshd guest events are captured.
+	StructuredLogPath string
 }
 
 // StartRun boots an existing installed disk with SSH/RDP forwards and a QMP
@@ -133,9 +153,6 @@ type RunConfig struct {
 func StartRun(ctx context.Context, cfg RunConfig) (*InstallVM, error) {
 	if cfg.DiskPath == "" {
 		return nil, fmt.Errorf("DiskPath is required")
-	}
-	if cfg.VarsPath == "" && !cfg.Secure {
-		return nil, fmt.Errorf("VarsPath is required (installed disk needs its NVRAM boot entry)")
 	}
 	outDir := cfg.OutputDir
 	if outDir == "" {
@@ -165,23 +182,28 @@ func StartRun(ctx context.Context, cfg RunConfig) (*InstallVM, error) {
 		vmName = "winkit-install"
 	}
 
+	runDisplayType := cfg.DisplayType
+	if runDisplayType == "" {
+		runDisplayType = "none"
+	}
 	spec := Spec{
-		VMName:          vmName,
-		CPUs:            cpus,
-		MemoryGB:        mem,
-		DiskPath:        cfg.DiskPath,
-		FirmwarePath:    fwPath,
-		VarsPath:        cfg.VarsPath,
-		QMPSocketDir:    outDir,
-		DisplayType:     "none",
-		SerialLogPath:   serialLog,
-		VirtIOISO:       cfg.VirtIOISO,
-		SSHPort:         cfg.SSHPort,
-		SSHGuestPort:    cfg.SSHGuestPort,
-		OpenSSHHostPort: cfg.OpenSSHHostPort,
-		RDPPort:         cfg.RDPPort,
-		SSHHost:         cfg.SSHHost,
-		SMBIOSSerial:    cfg.SMBIOSSerial,
+		VMName:                 vmName,
+		CPUs:                   cpus,
+		MemoryGB:               mem,
+		DiskPath:               cfg.DiskPath,
+		FirmwarePath:           fwPath,
+		VarsPath:               cfg.VarsPath,
+		QMPSocketDir:           outDir,
+		DisplayType:            runDisplayType,
+		SerialLogPath:          serialLog,
+		GuestStructuredLogPath: cfg.StructuredLogPath,
+		VirtIOISO:              cfg.VirtIOISO,
+		SSHPort:                cfg.SSHPort,
+		SSHGuestPort:           cfg.SSHGuestPort,
+		OpenSSHHostPort:        cfg.OpenSSHHostPort,
+		RDPPort:                cfg.RDPPort,
+		SSHHost:                cfg.SSHHost,
+		SMBIOSSerial:           cfg.SMBIOSSerial,
 	}
 	if cfg.Accel != "" {
 		spec.Accel = cfg.Accel
@@ -196,6 +218,16 @@ func StartRun(ctx context.Context, cfg RunConfig) (*InstallVM, error) {
 		spec.VarsPath = ""
 		spec.MachineType = "virt,virtualization=on,gic-version=3,its=on,secure=on"
 		spec.CPU = "neoverse-n1"
+	} else if cfg.VarsPath == "" {
+		// No vars.fd: use -kernel firmware which auto-discovers the ESP
+		// bootloader. Works with any accel (hvf, kvm, tcg).
+		kfw := KernelFirmwarePath()
+		if kfw == "" {
+			return nil, fmt.Errorf("no vars.fd and no kernel firmware found; cannot boot")
+		}
+		spec.FirmwarePath = kfw
+		spec.FirmwareKernel = true
+		spec.VarsPath = ""
 	}
 	spec.ApplyDefaults()
 
@@ -207,7 +239,13 @@ func StartRun(ctx context.Context, cfg RunConfig) (*InstallVM, error) {
 	argv[0] = qemuBin
 	os.MkdirAll(filepath.Join(outDir, "screenshots"), 0o755)
 
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	var cmd *exec.Cmd
+	if cfg.Detach {
+		cmd = exec.Command(argv[0], argv[1:]...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	} else {
+		cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
+	}
 	// Capture QEMU's own stderr/stdout so a launch failure (bad drive path,
 	// unsupported machine/accel) is diagnosable from the output dir instead of
 	// vanishing to the parent's terminal. Without this a dead VM looks identical
@@ -349,6 +387,10 @@ func StartInstall(ctx context.Context, cfg InstallConfig) (*InstallVM, error) {
 		mem = 4
 	}
 
+	displayType := cfg.DisplayType
+	if displayType == "" {
+		displayType = "none"
+	}
 	spec := Spec{
 		VMName:                 "winkit-install",
 		CPUs:                   cpus,
@@ -357,7 +399,7 @@ func StartInstall(ctx context.Context, cfg InstallConfig) (*InstallVM, error) {
 		FirmwarePath:           fwPath,
 		VarsPath:               varsPath,
 		QMPSocketDir:           outDir,
-		DisplayType:            "none",
+		DisplayType:            displayType,
 		SerialLogPath:          serialLog,
 		GuestProgressLogPath:   progressLog,
 		GuestStructuredLogPath: cfg.StructuredLogPath,
