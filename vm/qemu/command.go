@@ -287,7 +287,7 @@ func applySSHForward(spec Spec, argv []string) []string {
 			if spec.RDPPort != 0 {
 				argv[i+1] = argv[i+1] + fmt.Sprintf(",hostfwd=tcp:%s:%d-:3389", host, spec.RDPPort)
 			}
-			// A second forward for the Windows OpenSSH the wsl2 image ships on
+			// A second forward for the Windows OpenSSH the wsl image ships on
 			// :22, separate from the gosshd provisioning channel above.
 			if spec.OpenSSHHostPort != 0 {
 				argv[i+1] = argv[i+1] + fmt.Sprintf(",hostfwd=tcp:%s:%d-:22", host, spec.OpenSSHHostPort)

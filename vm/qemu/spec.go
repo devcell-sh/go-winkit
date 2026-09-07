@@ -41,16 +41,16 @@ type Spec struct {
 	SSHPort   uint16
 	// SSHGuestPort is the guest port SSHPort forwards to. Zero means 22 (the
 	// standard sshd), which is what WinPE's gosshd and a stock OpenSSH listen
-	// on. The wsl2 stack sets 2222: there gosshd runs as a dedicated
+	// on. The wsl build sets 2222: there gosshd runs as a dedicated
 	// provisioning server on a non-standard port so it coexists with the
 	// Windows OpenSSH the delivered image ships on :22.
 	SSHGuestPort uint16
 	// RDPPort, when non-zero, forwards host:RDPPort → guest:3389 alongside the
-	// SSH forward. Used by the wsl2 full-install stack to reach the installed
+	// SSH forward. Used by the wsl full-install build to reach the installed
 	// OS's Remote Desktop (the answer file enables RDP in specialize).
 	RDPPort uint16
 	// OpenSSHHostPort, when non-zero, forwards host:OpenSSHHostPort → guest:22
-	// in addition to the gosshd forward. The wsl2 stack uses it to verify the
+	// in addition to the gosshd forward. The wsl build uses it to verify the
 	// Windows OpenSSH the image ships on :22, separately from the gosshd
 	// provisioning channel on SSHGuestPort.
 	OpenSSHHostPort uint16

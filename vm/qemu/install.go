@@ -39,11 +39,11 @@ type InstallConfig struct {
 	DiskCacheMode string
 	OutputDir     string
 
-	// SSHPort forwards host:SSHPort → guest:SSHGuestPort. In the wsl2 stack the
+	// SSHPort forwards host:SSHPort → guest:SSHGuestPort. In the wsl build the
 	// guest port is gosshd's provisioning port, so this is the channel the host
 	// provisions over. Zero disables the forward.
 	SSHPort uint16
-	// SSHGuestPort is the guest port SSHPort maps to (0 = 22). The wsl2 stack
+	// SSHGuestPort is the guest port SSHPort maps to (0 = 22). The wsl build
 	// sets 2222 so the gosshd provisioning server coexists with the Windows
 	// OpenSSH the image ships on :22.
 	SSHGuestPort uint16

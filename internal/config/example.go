@@ -47,7 +47,6 @@ from: windows/11-pro-arm64
 # features:
 #   - OpenSSH.Server
 #   - Containers
-#   - Microsoft-Hyper-V-All
 
 # Files to inject into the image. In PE mode they are written into the
 # WIM at build time; in full-install mode they are uploaded over SSH

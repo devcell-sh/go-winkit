@@ -131,7 +131,9 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 	}
 
 	// --- Boot VM ---
-	buildJSONL := filepath.Join(filepath.Dir(dest), "build.jsonl")
+	// Raw guest event stream (QEMU chardev); the edge appends it into the
+	// unified build.jsonl after the build.
+	guestJSONL := filepath.Join(workDir, "guest.jsonl")
 	installOut := filepath.Join(workDir, "install")
 	secure := strings.HasPrefix(accel, "tcg")
 	logger.Info("starting Windows install VM",
@@ -154,7 +156,7 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 	switch backendName {
 	case "qemu":
 		installCfg.BackendExtra = &qemu.InstallOptions{
-			StructuredLogPath: buildJSONL,
+			StructuredLogPath: guestJSONL,
 			BootVolume:        bootVolume,
 			Secure:            secure,
 			DisplayType:       displayType,
@@ -169,8 +171,9 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 	defer machine.Stop()
 
 	stopTail := make(chan struct{})
-	go tailProgress(filepath.Join(machine.OutputDir(), "guest-progress.log"), logger, stopTail)
-	go tailProgress(buildJSONL, logger, stopTail)
+	go tailStream(filepath.Join(machine.OutputDir(), "guest-progress.log"), "progress", logger, stopTail)
+	go tailStream(filepath.Join(machine.OutputDir(), "serial.log"), "serial", logger, stopTail)
+	go tailStream(filepath.Join(machine.OutputDir(), "qemu.log"), "qemu", logger, stopTail)
 
 	// --- Wait for SSH ---
 	provAddr := fmt.Sprintf("127.0.0.1:%d", baseSSHPort)

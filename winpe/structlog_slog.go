@@ -1,10 +1,14 @@
 package winpe
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,10 +60,11 @@ func (h guestEventHandler) Handle(_ context.Context, r slog.Record) error {
 	if err := json.Unmarshal(b, &line); err != nil {
 		return err
 	}
+	line["source"] = "host"
 	for k, v := range extra {
 		line[k] = v
 	}
-	out, err := json.Marshal(line)
+	out, err := marshalOrdered(line)
 	if err != nil {
 		return err
 	}
@@ -67,6 +72,50 @@ func (h guestEventHandler) Handle(_ context.Context, r slog.Record) error {
 	defer h.mu.Unlock()
 	_, err = h.w.Write(append(out, '\n'))
 	return err
+}
+
+// marshalOrdered serializes one event with a stable key order — ts,
+// event, line first, then the remaining keys alphabetically — so the
+// unified JSONL reads chronologically at a glance and diffs cleanly.
+func marshalOrdered(obj map[string]any) ([]byte, error) {
+	head := []string{"ts", "event", "line"}
+	rest := make([]string, 0, len(obj))
+	for k := range obj {
+		if k != "ts" && k != "event" && k != "line" {
+			rest = append(rest, k)
+		}
+	}
+	sort.Strings(rest)
+
+	var b strings.Builder
+	b.WriteByte('{')
+	first := true
+	writeKV := func(k string) error {
+		v, ok := obj[k]
+		if !ok {
+			return nil
+		}
+		vb, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		if !first {
+			b.WriteByte(',')
+		}
+		first = false
+		kb, _ := json.Marshal(k)
+		b.Write(kb)
+		b.WriteByte(':')
+		b.Write(vb)
+		return nil
+	}
+	for _, k := range append(head, rest...) {
+		if err := writeKV(k); err != nil {
+			return nil, err
+		}
+	}
+	b.WriteByte('}')
+	return []byte(b.String()), nil
 }
 
 func statusForLevel(l slog.Level) string {
@@ -127,4 +176,55 @@ func (m multiHandler) WithGroup(name string) slog.Handler {
 		hs[i] = h.WithGroup(name)
 	}
 	return multiHandler{handlers: hs}
+}
+
+// AppendStreamJSONL appends the lines of srcPath to dst as GuestEvent
+// JSONL, namespaced under source. Lines that already are JSON objects
+// (the guest's structured stream) pass through with "source" injected;
+// plain-text lines (serial console, progress logs) are wrapped as
+// {"event":"log","line":...,"source":...} with the message JSON-escaped.
+// Wrapped lines are stamped with the merge time — their original wall
+// time is unknown — so consumers should treat them as coarse-ordered.
+// A missing srcPath is not an error: not every run produces every stream.
+func AppendStreamJSONL(dst io.Writer, srcPath, source string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer src.Close()
+
+	now := time.Now()
+	sc := bufio.NewScanner(src)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimRight(sc.Text(), "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err == nil && obj != nil {
+			if _, ok := obj["source"]; !ok {
+				obj["source"] = source
+			}
+		} else {
+			obj = map[string]any{
+				"ts":     now,
+				"event":  "log",
+				"status": "info",
+				"line":   line,
+				"source": source,
+			}
+		}
+		out, err := marshalOrdered(obj)
+		if err != nil {
+			continue
+		}
+		if _, err := dst.Write(append(out, '\n')); err != nil {
+			return err
+		}
+	}
+	return sc.Err()
 }

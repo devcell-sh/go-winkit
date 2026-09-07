@@ -30,21 +30,20 @@ import (
 //
 // Accelerator: the build phase defaults to the best available accelerator
 // (HVF on Mac, KVM on Linux, TCG fallback). Override with WINKIT_E2E_ACCEL.
-// Continue mode (WINKIT_E2E_DISK) defaults to TCG (secure/EL3) so the
-// hypervisor actually engages for verification.
+// Continue mode (WINKIT_E2E_DISK) defaults to TCG (secure/EL3).
 //
 // Inspectable output: all artifacts persist under test/results/<ts>-<TestName>
 // (testutil.ResultDir, the house convention; override with WINKIT_E2E_OUTDIR):
-//   - build-test.log   — the run's slog stream (also to stderr under -v)
-//   - build.jsonl       — structured guest events (gosshd; results root)
+//   - build.jsonl       — unified structured log, namespaced by "source":
+//     host slog events, guest structured events (merged from
+//     work/guest.jsonl after the build), and live-tailed progress + serial
+//     console lines
 //   - work/install/serial.log, work/install/guest-progress.log
 //   - screenshots/*.png — periodic QMP screendumps (converted from PPM)
 //   - wsl.qcow2          — the produced disk
 //
-// Scope: install → SSH → feature-enable → SSH/RDP verify → clean shutdown,
-// exactly what buildWSLImage does. It does NOT boot the produced disk on the
-// secure/EL3 machine, so it does not assert the hypervisor engages
-// (HypervisorPresent=True) — that finalize is deferred (CELL-495).
+// Scope: install → SSH → SSH/RDP verify → clean shutdown, exactly what
+// buildWSLImage does.
 func TestQcowBuilderWSL(t *testing.T) {
 	if os.Getenv("WINKIT_E2E") != "1" {
 		t.Skip("set WINKIT_E2E=1 to run the multi-hour wsl install (needs cached ISOs)")
@@ -105,8 +104,10 @@ func TestQcowBuilderWSL(t *testing.T) {
 	dest := filepath.Join(outDir, "wsl"+diskExt)
 	t.Logf("artifacts (persist after test): %s", outDir)
 
-	// --- logger → structured JSONL file + human-readable stderr under -v ---
-	logFile, err := os.Create(filepath.Join(outDir, "build-test.log"))
+	// --- logger → unified build.jsonl + human-readable stderr under -v ---
+	// Host events stream in live; the guest's raw event stream (QEMU
+	// chardev, work/guest.jsonl) is appended after the build (MergeGuestLog).
+	logFile, err := os.Create(filepath.Join(outDir, "build.jsonl"))
 	if err != nil {
 		t.Fatalf("create log: %v", err)
 	}
@@ -167,17 +168,20 @@ func TestQcowBuilderWSL(t *testing.T) {
 
 	// --- the call under test: identical to build.go's wsl branch ---
 	// buildWSLImage internally asserts every phase and returns an error if any
-	// fails: waitForWindowsSSH (whoami), wsl2EnableFeatures (FEATURES-ENABLED),
-	// wslVerify (Hyper-V state Enabled/EnablePending + RDP port reachable).
+	// fails: waitForWindowsSSH (whoami), wslVerify (SSH + RDP port reachable).
 	// A nil return therefore means all of those passed.
-	buildErr := wslImage(ctx, dest, cacheDir, winISO, virtioISO, workDir, logger, false, "", os.Getenv("WINKIT_E2E_WSL_IMAGE"), ResolveNixHome(""), "")
+	buildErr := wslImage(ctx, dest, cacheDir, winISO, virtioISO, workDir, logger, false, "", os.Getenv("WINKIT_E2E_WSL_IMAGE"), ResolveNixHome(""), nil, "")
 	close(stopShots)
 	<-shotsDone
+
+	if err := MergeGuestLog(logFile, workDir); err != nil {
+		t.Logf("merging guest.jsonl into build.jsonl: %v", err)
+	}
 
 	shots, _ := filepath.Glob(filepath.Join(shotDir, "*.png"))
 	t.Logf("captured %d screenshots in %s", len(shots), shotDir)
 	if buildErr != nil {
-		t.Fatalf("buildWSLImage: %v (inspect %s: build-test.log, install/serial.log, screenshots/)", buildErr, outDir)
+		t.Fatalf("buildWSLImage: %v (inspect %s: build.jsonl, work/install/serial.log, screenshots/)", buildErr, outDir)
 	}
 
 	// --- post-conditions on the produced artifact ---
@@ -206,7 +210,7 @@ func TestQcowBuilderWSL(t *testing.T) {
 	if sharedDir != "" && !continueMode {
 		marker := filepath.Join(sharedDir, ".winkit", "sftp-mounted")
 		if data, err := os.ReadFile(marker); err != nil {
-			t.Errorf("guest never wrote the SFTP marker (%v) — the 'mount the host SFTP share as a fixed disk' bootstrap step failed; check %s", err, filepath.Join(outDir, "build-test.log"))
+			t.Errorf("guest never wrote the SFTP marker (%v) — the 'mount the host SFTP share as a fixed disk' bootstrap step failed; check %s", err, filepath.Join(outDir, "build.jsonl"))
 		} else {
 			t.Logf("SFTP fixed-disk round trip verified: %s", strings.TrimSpace(string(data)))
 		}

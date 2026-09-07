@@ -51,7 +51,6 @@ func newWinPEBuildCmd() *cobra.Command {
 		gosshdExe string
 		arch      string
 		extraDir  string
-		hyperv    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "build <out.iso>",
@@ -132,13 +131,9 @@ func newWinPEBuildCmd() *cobra.Command {
 				}
 			}
 
-			var patches []winpe.RegistryPatch
-			if hyperv {
-				patches = append(patches, winpe.HyperVBootPatches())
-			}
 			bootWim := filepath.Join(stageDir, "sources", "boot.wim")
 			fmt.Fprintf(cmd.ErrOrStderr(), "injecting payload into %s\n", bootWim)
-			if err := winpe.InjectWinPEPayload(bootWim, payloadDir, patches...); err != nil {
+			if err := winpe.InjectWinPEPayload(bootWim, payloadDir); err != nil {
 				return err
 			}
 
@@ -156,7 +151,6 @@ func newWinPEBuildCmd() *cobra.Command {
 	cmd.Flags().StringVar(&gosshdExe, "gosshd-exe", "", "prebuilt gosshd.exe to inject (implies --gosshd)")
 	cmd.Flags().StringVar(&arch, "arch", "arm64", "guest architecture for gosshd (arm64 or amd64)")
 	cmd.Flags().StringVar(&extraDir, "extra", "", "directory of extra files to add to the payload")
-	cmd.Flags().BoolVar(&hyperv, "hyperv", false, "apply Hyper-V boot registry patches to boot.wim")
 	cmd.MarkFlagRequired("iso")
 	return cmd
 }

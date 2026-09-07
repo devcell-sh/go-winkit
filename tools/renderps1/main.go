@@ -53,12 +53,6 @@ func main() {
 			Tag   string
 			Drive string
 		}{"winkit-project", "Z"})},
-		{"devenv--virtualization-probe.ps1", templates.Render("devenv/virtualization-probe.ps1.tmpl", nil)},
-		{"devenv--wsl2-enable.ps1", templates.Render("devenv/wsl2-enable.ps1.tmpl", nil)},
-		{"devenv--wsl-engine-install.ps1", templates.Render("devenv/wsl-engine-install.ps1.tmpl", nil)},
-		{"devenv--hyperv-enable.ps1", templates.Render("devenv/hyperv-enable.ps1.tmpl", nil)},
-		{"devenv--hyperv-verify.ps1", templates.Render("devenv/hyperv-verify.ps1.tmpl", nil)},
-		{"devenv--nixos-wsl-import.ps1", templates.Render("devenv/nixos-wsl-import.ps1.tmpl", struct{ Distro string }{distro})},
 		{"devenv--wsl-user.ps1", templates.Render("devenv/wsl-user.ps1.tmpl", struct {
 			User   string
 			Distro string

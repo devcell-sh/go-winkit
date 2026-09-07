@@ -170,87 +170,6 @@ func TestGenerateAgent_SnapshotsSetupLogsEveryPoll(t *testing.T) {
 	assert.Greater(t, snapIdx, loopIdx, "snapshots happen inside the poll loop, not once")
 }
 
-func TestGenerateHyperVDiagScript_StructuredOutput(t *testing.T) {
-	progPort := `\\.\Global\` + ProgressPortName
-	out := string(GenerateHyperVDiagScript(progPort))
-
-	assert.Contains(t, out, "WINKIT HYPERV DIAGNOSTICS", "must have a recognisable header")
-	assert.Contains(t, out, "WINKIT HYPERV DIAGNOSTICS COMPLETE", "must have a completion marker")
-
-	// System info
-	assert.Contains(t, out, "SYSTEM INFO", "must report system info")
-	assert.Contains(t, out, "PROCESSOR_ARCHITECTURE", "must report CPU architecture")
-
-	// BCD
-	assert.Contains(t, out, "bcdedit", "must query BCD for hypervisor launch config")
-	assert.Contains(t, out, "hypervisorsettings", "must query BCD hypervisor settings")
-	assert.Contains(t, out, "bcdedit /enum ALL", "must dump full BCD store")
-
-	// Binaries
-	assert.Contains(t, out, "hvaa64.exe", "must verify hypervisor binary is present")
-	assert.Contains(t, out, "hvloader.dll", "must verify hypervisor loader is present")
-	assert.Contains(t, out, "hvservice.sys", "must verify hypervisor service driver is present")
-	assert.Contains(t, out, "winhv.sys", "must verify WinHV platform driver is present")
-	assert.Contains(t, out, "vmms.exe", "must check for vmms binary")
-	assert.Contains(t, out, "BINARIES_TOTAL_MISSING=", "must emit parseable binary count")
-
-	// Driver registry details
-	assert.Contains(t, out, "DRIVER REGISTRY DETAILS", "must dump full driver registry keys")
-
-	// DISM
-	assert.Contains(t, out, "dism", "must query DISM for installed packages")
-	assert.Contains(t, out, "Get-Features", "must query DISM features")
-	assert.Contains(t, out, "Hyper-V", "must reference Hyper-V")
-
-	// Service state
-	assert.Contains(t, out, "HYPERV SERVICE STATE", "must report Hyper-V service state")
-	assert.Contains(t, out, "WSL SERVICE STATE", "must report WSL2 service state")
-	assert.Contains(t, out, "vmms", "must check the Hyper-V VMMS service")
-	assert.Contains(t, out, "DependOnService", "must query driver dependencies")
-
-	// Hypervisor detection
-	assert.Contains(t, out, "HYPERVISOR DETECTION", "must probe for hypervisor presence")
-	assert.Contains(t, out, "DeviceGuard", "must check VBS/Device Guard state")
-	assert.Contains(t, out, "CentralProcessor", "must dump processor info from registry")
-
-	// Start services
-	assert.Contains(t, out, "START HYPERV SERVICES", "must attempt to start services")
-	assert.Contains(t, out, "_NET_START_EXIT=", "must emit per-service net start exit code")
-	assert.Contains(t, out, "sc.exe", "must query service state after start attempts")
-	assert.Contains(t, out, "_SC_EXIT=", "must emit per-service sc query exit code")
-	assert.Contains(t, out, "_SC_STATE=", "must emit per-service STATE from sc query")
-	assert.Contains(t, out, "tasklist.exe", "must list service-hosting processes")
-
-	// Event logs
-	assert.Contains(t, out, "EVENT LOGS", "must collect event logs")
-	assert.Contains(t, out, "Hyper-V-Hypervisor-Operational", "must check hypervisor operational log")
-
-	// SetupAPI
-	assert.Contains(t, out, "SETUPAPI LOGS", "must check driver setup logs")
-	assert.Contains(t, out, "setupapi.dev.log", "must dump setupapi device log")
-	assert.Contains(t, out, "SETUPAPI_ERRORS=", "must emit parseable setupapi error summary")
-
-	// Final status
-	assert.Contains(t, out, "FINAL DRIVER STATUS", "must report final driver status")
-	assert.Contains(t, out, "_START_VALUE=", "must emit parseable Start value per registered service")
-	assert.Contains(t, out, "POST-MORTEM SUMMARY", "must include post-mortem summary")
-	assert.Contains(t, out, "net.exe start", "must list all running services")
-
-	// Progress markers
-	assert.Contains(t, out, progPort, "must reference the progress port for live monitoring")
-	assert.Contains(t, out, "hyperv-diag-start", "must report start to serial")
-	assert.Contains(t, out, "hyperv-diag-complete", "must report completion to serial")
-
-	noSerial := string(GenerateHyperVDiagScript(""))
-	assert.NotContains(t, noSerial, "winkit:", "no serial output when progressPort is empty")
-}
-
-func TestHyperVDiagScriptCommand_InvokesScript(t *testing.T) {
-	cmd := HyperVDiagScriptCommand()
-	assert.Contains(t, cmd, HyperVDiagScriptName, "must reference the script name")
-	assert.Contains(t, cmd, "$WinkitVol", "must use PowerShell variable for volume ref")
-}
-
 func TestGenerateShellINI_NoSetup_RunsOnlyBootstrap(t *testing.T) {
 	out := string(GenerateShellINI_NoSetup())
 	assert.Contains(t, out, "[LaunchApps]")
@@ -365,11 +284,10 @@ func TestGeneratedPS1_SyntaxValid(t *testing.T) {
 	}
 
 	scripts := map[string][]byte{
-		"bootstrap.ps1":   GenerateBootstrap(cfg),
-		"agent.ps1":       GenerateAgent(cfg),
-		"winpe-diag.ps1":  GenerateDiagScript(),
-		"hyperv-diag.ps1": GenerateHyperVDiagScript(progressPort),
-		"echo-probe.ps1":  GenerateEchoProbeScript("winkit-viofs"),
+		"bootstrap.ps1":  GenerateBootstrap(cfg),
+		"agent.ps1":      GenerateAgent(cfg),
+		"winpe-diag.ps1": GenerateDiagScript(),
+		"echo-probe.ps1": GenerateEchoProbeScript("winkit-viofs"),
 	}
 
 	outDir := t.TempDir()

@@ -47,10 +47,8 @@ func InspectFeatures(wimPath string, imageNum int) ([]FeatureGroup, error) {
 	defer os.RemoveAll(tmp)
 	_ = w.ExtractPaths(img, tmp, []string{
 		`\Windows\System32\config\SYSTEM`,
-		`\Windows\System32\config\SOFTWARE`,
 	})
 	sysHive := filepath.Join(tmp, "Windows", "System32", "config", "SYSTEM")
-	softHive := filepath.Join(tmp, "Windows", "System32", "config", "SOFTWARE")
 
 	inSys := func(name string) Feature {
 		return Feature{Name: name, Present: sys32[strings.ToLower(name)]}
@@ -74,27 +72,10 @@ func InspectFeatures(wimPath string, imageNum int) ([]FeatureGroup, error) {
 		return f
 	}
 
-	// ETW channel inventory: how many Hyper-V-Hypervisor channels are
-	// registered, out of the total. This is what lets `wevtutil qe` read the
-	// "hypervisor launched" event once the EventLog service is running.
-	chanFeat := Feature{Name: "Hyper-V-Hypervisor channels"}
-	if chans, err := regedit.ReadServiceKey(softHive,
-		`Microsoft\Windows\CurrentVersion\WINEVT\Channels`); err == nil {
-		hv := 0
-		for n := range chans.Subkeys {
-			if strings.Contains(strings.ToLower(n), "hyper-v-hypervisor") {
-				hv++
-			}
-		}
-		chanFeat.Present = hv > 0
-		chanFeat.Detail = fmt.Sprintf("%d of %d channels", hv, len(chans.Subkeys))
-	}
-
 	return []FeatureGroup{
 		{Name: "winkit payload", Items: []Feature{
 			inSet("gosshd.exe", winkitDir),
 			inSet("gosshd.cmd", winkitDir),
-			inSet("hvenable.cmd", winkitDir),
 			{Name: "winpeshl.ini", Present: sys32["winpeshl.ini"]},
 		}},
 		{Name: "PowerShell", Items: []Feature{
@@ -105,14 +86,6 @@ func InspectFeatures(wimPath string, imageNum int) ([]FeatureGroup, error) {
 			inSys("wevtapi.dll"),
 			inSys("wevtutil.exe"),
 			svc("EventLog"),
-			chanFeat,
-		}},
-		{Name: "Hypervisor / VMP", Items: []Feature{
-			inSys("hvaa64.exe"),
-			inSys("hvloader.dll"),
-			svc("vmcompute"),
-			svc("vmbus"),
-			svc("hvservice"),
 		}},
 	}, nil
 }

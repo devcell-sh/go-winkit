@@ -12,7 +12,7 @@ import (
 )
 
 // sftpConfig returns a config with the SFTP share and its payloads enabled,
-// the way the wsl2 build sets it up.
+// the way the wsl build sets it up.
 func sftpConfig() Config {
 	cfg := DefaultConfig()
 	cfg.SFTPPort = 9844
@@ -70,6 +70,38 @@ func TestGenerateBootstrapScript_SFTPDefaults(t *testing.T) {
 
 	assert.Contains(t, ps1, "winkit", "default share user")
 	assert.Contains(t, ps1, "W:", "default drive letter")
+}
+
+// RcloneViaS6: the mount's lifetime belongs to the distro's s6 loop (the
+// baked rclone-mount service execs rclone.exe via interop), so the bootstrap
+// must install WinFsp + rclone but register no scheduled task and no
+// launcher loop — and it must still verify the drive, after the s6
+// supervisor starts.
+func TestGenerateBootstrapScript_SFTPMountViaS6(t *testing.T) {
+	cfg := sftpConfig()
+	cfg.RcloneViaS6 = true
+	ps1 := string(GenerateBootstrapScript(cfg))
+
+	assert.Contains(t, ps1, WinFspPayloadName, "WinFsp still installs from the shipped MSI")
+	assert.Contains(t, ps1, RclonePayloadName, "rclone.exe still ships for the interop exec")
+	assert.NotContains(t, ps1, RcloneMountTaskName, "no scheduled task — s6 owns the process")
+	assert.NotContains(t, ps1, "mount-project.ps1", "no launcher retry loop — s6-supervise restarts")
+	assert.NotContains(t, ps1, "obscure", "obscuring happens in the s6 run script, not the bootstrap")
+	assert.Contains(t, ps1, "Invoke-Step 'verify s6-supervised SFTP mount'",
+		"the drive must still be verified after s6 starts")
+	verifyIdx := strings.Index(ps1, "verify s6-supervised SFTP mount")
+	s6Idx := strings.Index(ps1, "start s6 service supervisor")
+	assert.Greater(t, verifyIdx, s6Idx, "verification must come after the s6 supervisor starts")
+	assert.Contains(t, ps1, `C:\project`, "the stable junction still gets created")
+	assert.Contains(t, ps1, "sftp-mounted", "the write-back marker still proves the round trip")
+}
+
+// The legacy scheduled-task path stays the default (prebuilt tarballs and
+// dockerless hosts have no baked service) and must not gain the s6 verify
+// step.
+func TestGenerateBootstrapScript_SFTPTaskPathHasNoS6Verify(t *testing.T) {
+	ps1 := string(GenerateBootstrapScript(sftpConfig()))
+	assert.NotContains(t, ps1, "verify s6-supervised SFTP mount")
 }
 
 // The mount must go through Invoke-Step (log-and-continue), never bare throw

@@ -55,7 +55,7 @@ type Server struct {
 	// Shell selects the interpreter sessions run under. "" or "cmd" uses
 	// cmd.exe — the WinPE-safe default, because full Windows PowerShell is not
 	// guaranteed on WinPE's PATH (pwsh is staged elsewhere). "powershell" uses
-	// Windows PowerShell (System32\...\powershell.exe), which the wsl2
+	// Windows PowerShell (System32\...\powershell.exe), which the wsl
 	// provisioning server runs under so the host can send PowerShell directly.
 	Shell string
 
@@ -129,7 +129,7 @@ func SessionCommand(request string) []string {
 // SessionCommandShell is the argv for a session under the named shell: "cmd"
 // (default) or "powershell". Under powershell the request is passed as a single
 // -Command argument, so the host can send a PowerShell one-liner verbatim with
-// no cmd re-parsing — what the wsl2 provisioning path relies on.
+// no cmd re-parsing — what the wsl provisioning path relies on.
 func SessionCommandShell(request, shell string) []string {
 	if shell == "powershell" {
 		if request == "" {

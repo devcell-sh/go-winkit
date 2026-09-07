@@ -43,6 +43,36 @@ func SSHDBaseService() s6.Service { return builtinService("base", "sshd") }
 // compiled-in default path differs.
 func SSHDNixService() s6.Service { return builtinService("nix", "sshd") }
 
+// RcloneMountService supervises the Windows rclone.exe SFTP mount from the
+// distro's s6 loop via WSL1 interop, replacing the winkit-rclone-mount
+// scheduled task. The Windows side still owns the mount machinery (WinFsp,
+// rclone.exe installed by the bootstrap); s6 owns process lifetime. The
+// run script is the embedded templates/s6/common/rclone-mount module with
+// the build-time share parameters substituted in.
+func RcloneMountService(host string, port int, user, password, drive, volname string) (s6.Service, error) {
+	if host == "" || port <= 0 || user == "" || drive == "" {
+		return s6.Service{}, fmt.Errorf("wsl: rclone mount needs host, port, user and drive (got host=%q port=%d user=%q drive=%q)", host, port, user, drive)
+	}
+	svc := builtinService("common", "rclone-mount")
+	svc.Run = strings.NewReplacer(
+		"@HOST@", host,
+		"@PORT@", fmt.Sprintf("%d", port),
+		"@USER@", user,
+		"@PASS@", shellQuote(password),
+		"@DRIVE@", drive,
+		"@VOLNAME@", volname,
+	).Replace(svc.Run)
+	if err := svc.Validate(); err != nil {
+		return s6.Service{}, err
+	}
+	return svc, nil
+}
+
+// shellQuote single-quotes s for POSIX sh, escaping embedded quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // DirShareService generates a service that (re)applies the host dir-share
 // symlinks every boot: the mount script runs, then the service parks so
 // s6-supervise does not respawn it in a loop.

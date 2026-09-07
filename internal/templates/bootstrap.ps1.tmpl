@@ -232,6 +232,15 @@ Invoke-Step 'mount the host SFTP share as a fixed disk' {
     if (-not $exe) { throw 'rclone.exe not found in the payload zip' }
     $rclone = Join-Path $rcloneDir 'rclone.exe'
     Copy-Item -Path $exe.FullName -Destination $rclone -Force
+{{- if .RcloneViaS6}}
+
+    # The mount process itself is owned by the distro's s6 loop (the baked
+    # rclone-mount service execs this rclone.exe via WSL1 interop), so this
+    # step only installs the machinery. The drive is verified after the s6
+    # supervisor starts.
+    Send-Progress 'WinFsp + rclone installed (mount supervised by s6)'
+}
+{{- else}}
 
     # Connection-string passwords must be rclone-obscured.
     $ob = (& $rclone obscure '{{.SFTPPassword}}' | Select-Object -First 1)
@@ -296,6 +305,7 @@ Invoke-Step 'mount the host SFTP share as a fixed disk' {
     Set-Content -Path '{{.SFTPDrive}}:\.winkit\sftp-mounted' -Value ("mounted by $env:COMPUTERNAME at " + (Get-Date -Format o))
     Send-Progress "mounted host SFTP share as {{.SFTPDrive}}: (DRIVE_FIXED)"
 }
+{{- end}}
 {{- end}}
 
 Invoke-Step 'install OpenSSH server' {
@@ -386,10 +396,8 @@ Invoke-Step 'open the firewall for SSH' {
 Invoke-Step 'install WSL package' {
     # On 24H2 the System32 wsl.exe is a stub: it cannot install anything.
     # The real WSL runtime ships as an MSI from GitHub. The WSL1 optional
-    # feature is enabled during specialize (EnableWSL1Feature); the hypervisor
-    # features (VirtualMachinePlatform, Hyper-V) are staged later over SSH by
-    # wsl2EnableFeatures when WINKIT_WSL2 asks for them. This step installs
-    # the user-space runtime so wsl.exe --import is available on the image.
+    # feature is enabled during specialize (EnableWSL1Feature). This step
+    # installs the user-space runtime so wsl.exe --import is available.
     $arch = if ([Environment]::Is64BitOperatingSystem -and [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }
     $ver = '2.7.12'
     $msiUrl = "https://github.com/microsoft/WSL/releases/download/$ver/wsl.$ver.0.$arch.msi"
@@ -467,6 +475,30 @@ Invoke-Step 'start s6 service supervisor for WSL distro' {
     Start-ScheduledTask -TaskName winkit-s6
     Send-Progress "s6-svscan started for $distro (sshd on 127.0.0.1:2223)"
 }
+{{- if and .SFTPPort .RcloneViaS6}}
+
+Invoke-Step 'verify s6-supervised SFTP mount' {
+    # The rclone-mount s6 service (baked into the distro) execs the Windows
+    # rclone.exe via interop; s6-supervise retries until the host server is
+    # reachable. Wait for the drive, then prove the full round trip with a
+    # write-back marker the host can assert on.
+    $mounted = $false
+    foreach ($i in 1..24) {
+        if (Test-Path '{{.SFTPDrive}}:\' -ErrorAction SilentlyContinue) { $mounted = $true; break }
+        Start-Sleep -Seconds 5
+    }
+    if (-not $mounted) { throw 'SFTP share did not appear as {{.SFTPDrive}}: (is the host sftpshare server up? see C:\rclone-mount.log)' }
+
+    # Stable path for scripts regardless of the drive letter.
+    if (-not (Test-Path 'C:\project')) {
+        New-Item -ItemType SymbolicLink -Path 'C:\project' -Target '{{.SFTPDrive}}:\' -Force | Out-Null
+    }
+
+    New-Item -ItemType Directory -Path '{{.SFTPDrive}}:\.winkit' -Force | Out-Null
+    Set-Content -Path '{{.SFTPDrive}}:\.winkit\sftp-mounted' -Value ("mounted by $env:COMPUTERNAME at " + (Get-Date -Format o))
+    Send-Progress "mounted host SFTP share as {{.SFTPDrive}}: (DRIVE_FIXED, s6-supervised)"
+}
+{{- end}}
 
 {{- if or .WallpaperName .WallpaperPath}}
 

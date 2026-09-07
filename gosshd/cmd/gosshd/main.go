@@ -15,7 +15,7 @@
 // gosshd runs exactly as before.
 //
 // -addr overrides the listen address (default gosshd.DefaultAddr, ":22"). The
-// wsl2 build runs a second gosshd as a dedicated provisioning channel on a
+// wsl build runs a second gosshd as a dedicated provisioning channel on a
 // non-standard port so it can coexist with the Windows OpenSSH the image
 // ships on :22. Flags come before the positionals; WinPE callers that pass
 // none behave exactly as before.

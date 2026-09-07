@@ -76,7 +76,6 @@ func newBuildCmd() *cobra.Command {
 		noCache       bool
 		cacheDir      string
 		force         bool
-		noHypervisor  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "build [dest]",
@@ -178,13 +177,15 @@ func newBuildCmd() *cobra.Command {
 				cacheDir = cache.Dir()
 			}
 
-			// Debug artifacts follow the test/results/<ts>-<name> convention:
-			// .winkit/debug/<ts>-build/ holds the structured host log always,
-			// plus periodic VM screenshots under --debug.
+			// build.jsonl is the unified structured log, next to the produced
+			// artifact: host slog events stream in live, and the guest's raw
+			// event stream (QEMU chardev, work-dir guest.jsonl) is appended
+			// after the build. Debug artifacts (screenshots) follow the
+			// test/results/<ts>-<name> convention under .winkit/debug/.
 			debug, _ := cmd.Flags().GetBool("debug")
 			debugDir := filepath.Join(".winkit", "debug",
 				time.Now().UTC().Format("20060102T150405")+"-build")
-			if err := ui.AttachLogFile(filepath.Join(debugDir, "host.jsonl")); err != nil {
+			if err := ui.AttachLogFile(filepath.Join(filepath.Dir(dest), "build.jsonl")); err != nil {
 				return err
 			}
 			ui.Logger.Debug("debug artifacts", "dir", debugDir)
@@ -208,6 +209,9 @@ func newBuildCmd() *cobra.Command {
 					return err
 				}
 				defer os.RemoveAll(workDir)
+				// Runs before workDir's RemoveAll (LIFO), on success and
+				// failure alike — failed builds need the guest log most.
+				defer ui.MergeGuestLog(workDir)
 
 				// The build always produces a qcow2 first. For non-qcow2
 				// formats the qcow2 lands in workDir and is packaged into
@@ -351,9 +355,6 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "redownload the cached ISOs before building")
 	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "cache directory (default: "+cache.DirEnv+", else user cache dir + /winkit)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing image without asking")
-	cmd.Flags().BoolVar(&noHypervisor, "no-hypervisor", false,
-		"transplant VMP but leave the hypervisor disabled "+
-			"(no hypervisorlaunchtype, no first-boot hook)")
 	return cmd
 }
 

@@ -9,24 +9,22 @@ import (
 
 func TestBuildConfig_DefaultOps(t *testing.T) {
 	cfg := BuildConfig{
-		HyperV:  true,
-		WSL2:    true,
 		OpenSSH: true,
 		VirtIO:  true,
 	}
 	ops := cfg.wimPrepOps()
 	assert.NotEmpty(t, ops, "enabled features must produce WimPrepOps")
 
-	var hasFeature, hasDriver bool
+	var hasCapability, hasDriver bool
 	for _, op := range ops {
-		if op.Feature != "" {
-			hasFeature = true
+		if op.Capability != "" {
+			hasCapability = true
 		}
 		if op.Driver != "" {
 			hasDriver = true
 		}
 	}
-	assert.True(t, hasFeature, "HyperV/WSL2/OpenSSH should produce Feature ops")
+	assert.True(t, hasCapability, "OpenSSH should produce Capability ops")
 	assert.True(t, hasDriver, "VirtIO should produce Driver ops")
 }
 
@@ -38,7 +36,6 @@ func TestBuildConfig_NoOpsWhenAllDisabled(t *testing.T) {
 
 func TestBuildConfig_SharedFiles(t *testing.T) {
 	cfg := BuildConfig{
-		HyperV:  true,
 		OpenSSH: true,
 		PwshFiles: map[string][]byte{
 			"/pwsh/pwsh.exe": []byte("fake-pwsh"),

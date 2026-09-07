@@ -96,7 +96,7 @@ tasks:
         ls -lh "$DEST/wsl.qcow2"
 
   test:wsl:
-    desc: "Full unattended Windows install with NixDev (WSL1) + SFTP fixed-disk share; WINKIT_WSL2=true adds the hypervisor stack"
+    desc: "Full unattended Windows install with a WSL1 distro + SFTP fixed-disk share"
     summary: |
       Runs TestQcowBuilderWSL: builds nix.wsl (docker; cached), builds the
       answer volume (gosshd, OpenSSH, rclone/WinFsp payloads, nix.wsl), boots
@@ -104,18 +104,13 @@ tasks:
       bootstrap-imported NixDev distro (`nix --version` + drvfs W: probe),
       asserts the SFTP fixed-disk round trip, and shuts down cleanly.
 
-      WSL2 is opt-in: WINKIT_WSL2=true additionally enables and verifies
-      VirtualMachinePlatform/WSL/Hyper-V online (needs a nested-virt-capable
-      runtime host to actually engage). Default builds a WSL1-only image —
-      no hypervisor features.
-
       Continue mode: WINKIT_E2E_DISK=<installed.qcow2> boots an existing disk
       instead of installing, re-verifies (SSH/RDP, SFTP share, NixDev), and
       with WINKIT_E2E_INTERACTIVE (default on) stays up for manual poking.
 
       Env: WINKIT_E2E_ACCEL (default hvf on Mac), WINKIT_E2E_DISK,
       WINKIT_E2E_TEARDOWN, WINKIT_E2E_OUTDIR, WINKIT_SHARED_DIR /
-      WINKIT_E2E_SHARED_DIR, WINKIT_SFTP_PORT (default 9844), WINKIT_WSL2,
+      WINKIT_E2E_SHARED_DIR, WINKIT_SFTP_PORT (default 9844),
       WINKIT_LINK=static for vendored libwim.
 
       Artifacts (log, screenshots, wsl.qcow2) persist under
@@ -132,7 +127,7 @@ tasks:
       # which logs that result dir — in the bind-mounted .scratch/debug so it is
       # readable from the devcell container.
       - mkdir -p .scratch/debug
-      - set -o pipefail; CGO_ENABLED=1 go test -tags '{{.TAGS}}' -run TestQcowBuilderWSL -v -timeout 5h ./internal/cli/ 2>&1 | tee .scratch/debug/test-wsl.log
+      - set -o pipefail; CGO_ENABLED=1 go test -tags '{{.TAGS}}' -run TestQcowBuilderWSL -v -timeout 5h ./build/ 2>&1 | tee .scratch/debug/test-wsl.log
 
 
   sftp:get:
@@ -199,7 +194,7 @@ tasks:
       - |
         set -euo pipefail
         BIN="$(mktemp -d)/cli.test"
-        CGO_ENABLED=1 go test -tags '{{.TAGS}}' -c -o "$BIN" ./internal/cli/
+        CGO_ENABLED=1 go test -tags '{{.TAGS}}' -c -o "$BIN" ./build/
         codesign --force --sign - --entitlements winpe/vz/vz.entitlements "$BIN"
         MARK="$(mktemp)"
         STATUS=0

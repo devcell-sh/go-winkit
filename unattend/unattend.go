@@ -57,7 +57,7 @@ type Config struct {
 	// inconsistent. The guest truncates to this length before extracting.
 	OpenSSHPayloadSize int
 	// GosshdBinaryName is the filename of the gosshd server binary shipped on
-	// the answer volume, empty when none is used. gosshd is the wsl2 build's
+	// the answer volume, empty when none is used. gosshd is the wsl build's
 	// dedicated provisioning SSH: specialize copies it to C: and registers an
 	// onstart SYSTEM task, so a reachable channel exists before (and
 	// independent of) the fragile first-logon bootstrap that installs the
@@ -80,7 +80,7 @@ type Config struct {
 	GosshdVsockPort uint32
 	// GuestHostIP is the IP address the guest uses to reach the host.
 	// Defaults to "10.0.2.2" (QEMU user-mode networking). Callers using a
-	// different networking topology (e.g. bridged, WSL2 NAT) set this to the
+	// different networking topology (e.g. bridged NAT) set this to the
 	// appropriate host address.
 	GuestHostIP string
 	// SFTPPort, when non-zero, adds a first-logon bootstrap step that mounts
@@ -102,6 +102,13 @@ type Config struct {
 	// SFTPDrive is the drive letter (no colon) the share is mounted at.
 	// Empty falls back to "W".
 	SFTPDrive string
+	// RcloneViaS6 hands the rclone mount's process lifetime to the WSL
+	// distro's s6 loop (wsl.RcloneMountService baked into the rootfs): the
+	// bootstrap then only installs WinFsp + rclone and verifies the drive
+	// after the s6 supervisor starts, instead of registering the
+	// winkit-rclone-mount scheduled task. Set by builds that bake the
+	// service; prebuilt/dockerless distros keep the scheduled task.
+	RcloneViaS6 bool
 	// RclonePayload is the filename of the rclone windows/arm64 release zip
 	// shipped on the answer volume, with RclonePayloadData its bytes. Ships
 	// byte-exact: zip readers scan back from the end of the file, so FAT
@@ -123,9 +130,7 @@ type Config struct {
 	// WSL1 distros cannot register without it — wsl --import --version 1
 	// exits -1 (WSL_E_WSL1_NOT_SUPPORTED). Enabled with /norestart during
 	// specialize so the reboot into OOBE completes it before the
-	// first-logon bootstrap imports distro.wsl. The hypervisor-side features
-	// (VirtualMachinePlatform, Hyper-V) stay host-driven over SSH and
-	// WINKIT_WSL2-gated: WSL1 does not need them.
+	// first-logon bootstrap imports distro.wsl.
 	EnableWSL1Feature bool
 	// SMBIOSHostname registers a boot-time scheduled task that reads the
 	// SMBIOS serial number (QEMU -smbios type=1,serial=<name>) and renames
@@ -1103,7 +1108,6 @@ func BuildAnswerVolume(cfg Config, destPath string) error {
 		})
 		extra["/"+winpe.AgentVolumeMarker] = []byte("winkit agent volume\r\n")
 		extra["/"+winpe.DiagScriptName] = winpe.GenerateDiagScript()
-		extra["/"+winpe.HyperVDiagScriptName] = winpe.GenerateHyperVDiagScript("")
 		if cfg.AgentCommand != "" {
 			// set /p reads the first line only, so padding after the
 			// newline is harmless.
