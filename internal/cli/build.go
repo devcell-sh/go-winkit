@@ -76,6 +76,7 @@ func newBuildCmd() *cobra.Command {
 		noCache       bool
 		cacheDir      string
 		force         bool
+		vagrantFlag   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "build [dest]",
@@ -160,6 +161,22 @@ func newBuildCmd() *cobra.Command {
 				return err
 			}
 
+			// --vagrant (or a vagrant: block in winkit.yaml) emits a
+			// vagrant-qemu Vagrantfile next to the image. The flag wins
+			// when set explicitly, so --vagrant=false silences the yaml.
+			vagrantOn := cfg.Vagrant != nil
+			if cmd.Flags().Changed("vagrant") {
+				vagrantOn = vagrantFlag
+			}
+			if vagrantOn {
+				if imgFmt == imageformat.UTM {
+					return fmt.Errorf("--vagrant requires --image-type=qcow2 or box (.utm is not vagrant-bootable)")
+				}
+				if opts.PE {
+					return fmt.Errorf("--vagrant is not supported with --pe (WinPE volumes are ephemeral)")
+				}
+			}
+
 			dest := "./"
 			if len(args) == 1 {
 				dest = args[0]
@@ -177,18 +194,26 @@ func newBuildCmd() *cobra.Command {
 				cacheDir = cache.Dir()
 			}
 
-			// build.jsonl is the unified structured log, next to the produced
-			// artifact: host slog events stream in live, and the guest's raw
-			// event stream (QEMU chardev, work-dir guest.jsonl) is appended
-			// after the build. Debug artifacts (screenshots) follow the
-			// test/results/<ts>-<name> convention under .winkit/debug/.
+			// build.jsonl is the unified structured log: host slog events
+			// stream in live, and the guest's raw event stream (QEMU
+			// chardev, work-dir guest.jsonl) is appended after the build.
+			// With --debug it lands with the other debug artifacts under
+			// .winkit/debug/<ts>-build (screenshots etc.); otherwise it
+			// goes to the system temp dir so the project directory stays
+			// clean — the TUI carries the progress, and the path is
+			// printed if the build fails.
 			debug, _ := cmd.Flags().GetBool("debug")
-			debugDir := filepath.Join(".winkit", "debug",
-				time.Now().UTC().Format("20060102T150405")+"-build")
-			if err := ui.AttachLogFile(filepath.Join(filepath.Dir(dest), "build.jsonl")); err != nil {
+			buildStamp := time.Now().UTC().Format("20060102T150405")
+			debugDir := filepath.Join(".winkit", "debug", buildStamp+"-build")
+			logPath := filepath.Join(os.TempDir(), "winkit-build-"+buildStamp+".jsonl")
+			if debug {
+				logPath = filepath.Join(debugDir, "build.jsonl")
+			}
+			if err := ui.AttachLogFile(logPath); err != nil {
 				return err
 			}
 			ui.Logger.Debug("debug artifacts", "dir", debugDir)
+			ui.Logger.Debug("structured log", "path", logPath)
 
 			// Resolve media spec from BuildOpts.From for the fetch pipeline.
 			spec, err := specFromFrom(opts.From)
@@ -329,10 +354,16 @@ func newBuildCmd() *cobra.Command {
 					return nil
 				}
 				logger.Info("packaging image", "format", imgFmt)
-				return imageformat.Package(imgFmt, qcow2Dest, dest, nil)
+				var pkgOpts *imageformat.PackageOpts
+				if imgFmt == imageformat.Box {
+					v := vagrantOptsFor(cfg, "")
+					pkgOpts = &imageformat.PackageOpts{Vagrant: &v}
+				}
+				return imageformat.Package(imgFmt, qcow2Dest, dest, pkgOpts)
 			}()
 			ui.Finish(err)
 			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "full build log: %s\n", logPath)
 				return err
 			}
 			info, _ := os.Stat(dest)
@@ -340,7 +371,30 @@ func newBuildCmd() *cobra.Command {
 			if info != nil {
 				sz = float64(info.Size()) / (1024 * 1024)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s (%.0f MB) -- boot with: winkit start %s\n", dest, sz, dest)
+			if imgFmt == imageformat.Box {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s (%.0f MB) -- add with: vagrant box add %s --name winkit/%s\n",
+					dest, sz, dest, stage)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s (%.0f MB) -- boot with: winkit start %s\n", dest, sz, dest)
+			}
+
+			if vagrantOn {
+				vfPath := filepath.Join(filepath.Dir(dest), "Vagrantfile")
+				if _, err := os.Stat(vfPath); err == nil && !force {
+					if !confirm(cmd, fmt.Sprintf("%s exists — overwrite? [y/N] ", vfPath)) {
+						return fmt.Errorf("aborted: %s exists", vfPath)
+					}
+				}
+				if imgFmt == imageformat.Box {
+					err = imageformat.WriteBoxVagrantfile(vfPath, filepath.Base(dest), "winkit/"+stage)
+				} else {
+					err = imageformat.WriteVagrantfile(vfPath, vagrantOptsFor(cfg, filepath.Base(dest)))
+				}
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s -- boot with: vagrant up\n", vfPath)
+			}
 			return nil
 		},
 	}
@@ -349,12 +403,13 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&wslFlag, "wsl", false, "enable WSL in the built image")
 	cmd.Flags().StringVar(&wslImage, "wsl-image", "", "WSL distro image (alpine, ubuntu, or path to .wsl tarball)")
 	cmd.Flags().StringVar(&fromFlag, "from", "", "media source: windows/<edition>-<arch>, ./path.iso, or ./path.wim (default: windows/11-pro-arm64)")
-	cmd.Flags().StringVar(&imageTypeFlag, "image-type", "qcow2", "output image format (qcow2, utm)")
+	cmd.Flags().StringVar(&imageTypeFlag, "image-type", "qcow2", "output image format (qcow2, utm, box)")
 	cmd.Flags().StringVar(&accel, "accel", "", "QEMU accelerator: hvf, kvm, or tcg")
 	cmd.Flags().IntVar(&vncDisplay, "vnc", -1, "start a VNC server on display :N (port 5900+N) to watch the install")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "redownload the cached ISOs before building")
 	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "cache directory (default: "+cache.DirEnv+", else user cache dir + /winkit)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing image without asking")
+	cmd.Flags().BoolVar(&vagrantFlag, "vagrant", false, "write a vagrant-qemu Vagrantfile next to the built image")
 	return cmd
 }
 

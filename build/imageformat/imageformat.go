@@ -16,6 +16,7 @@ type Format int
 const (
 	Qcow2 Format = iota + 1
 	UTM
+	Box
 )
 
 func ParseFormat(s string) (Format, error) {
@@ -24,8 +25,10 @@ func ParseFormat(s string) (Format, error) {
 		return Qcow2, nil
 	case "utm":
 		return UTM, nil
+	case "box":
+		return Box, nil
 	default:
-		return 0, fmt.Errorf("unknown image format %q (want qcow2 or utm)", s)
+		return 0, fmt.Errorf("unknown image format %q (want qcow2, utm, or box)", s)
 	}
 }
 
@@ -35,6 +38,8 @@ func (f Format) Ext() string {
 		return ".qcow2"
 	case UTM:
 		return ".utm"
+	case Box:
+		return ".box"
 	default:
 		return ""
 	}
@@ -46,6 +51,8 @@ func (f Format) String() string {
 		return "qcow2"
 	case UTM:
 		return "utm"
+	case Box:
+		return "box"
 	default:
 		return "unknown"
 	}
@@ -60,6 +67,9 @@ type PackageOpts struct {
 	VMName   string
 	MemoryMB int
 	CPUs     int
+	// Vagrant parameterizes the Vagrantfile embedded in a Box package
+	// (ImageName is ignored — the box supplies the disk itself).
+	Vagrant *VagrantOpts
 }
 
 func Package(f Format, qcow2Path, dest string, opts *PackageOpts) error {
@@ -68,6 +78,8 @@ func Package(f Format, qcow2Path, dest string, opts *PackageOpts) error {
 		return packageQcow2(qcow2Path, dest)
 	case UTM:
 		return packageUTM(qcow2Path, dest, opts)
+	case Box:
+		return packageBox(qcow2Path, dest, opts)
 	default:
 		return fmt.Errorf("unsupported format for packaging: %v", f)
 	}
