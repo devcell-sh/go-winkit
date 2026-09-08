@@ -18,10 +18,19 @@ func (c *Config) ToBuildOpts() (*buildopts.BuildOpts, error) {
 		From:     c.From,
 		PE:       c.PE,
 		Features: c.Features,
+		Hostname: c.Hostname,
 	}
 
 	if c.WSL != nil {
 		opts.WSL = &buildopts.WSLConfig{Image: c.WSL.Image, ServicesDir: c.WSL.Services}
+	}
+
+	if c.Ports != nil {
+		opts.Ports = buildopts.Ports{
+			RDP:     uint16(c.Ports.RDP),
+			Gossh:   uint16(c.Ports.Gossh),
+			OpenSSH: uint16(c.Ports.OpenSSH),
+		}
 	}
 
 	for phaseName, cmds := range c.Commands.Phases {

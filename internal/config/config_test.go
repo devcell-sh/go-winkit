@@ -367,3 +367,66 @@ func TestLoadDirectoryHooks_NoHooksDir(t *testing.T) {
 		t.Fatalf("expected no phases, got %v", cfg.Commands.Phases)
 	}
 }
+
+func TestParse_Ports(t *testing.T) {
+	cfg, err := Parse([]byte("from: windows/11-pro-arm64\nports:\n  rdp: 13389\n  gossh: 10022\n  openssh: 10122\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Ports == nil {
+		t.Fatal("ports not parsed")
+	}
+	if cfg.Ports.RDP != 13389 || cfg.Ports.Gossh != 10022 || cfg.Ports.OpenSSH != 10122 {
+		t.Fatalf("ports = %+v", cfg.Ports)
+	}
+	opts, err := cfg.ToBuildOpts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Ports.RDP != 13389 || opts.Ports.Gossh != 10022 || opts.Ports.OpenSSH != 10122 {
+		t.Fatalf("buildopts ports = %+v", opts.Ports)
+	}
+}
+
+func TestValidate_PortsOutOfRange(t *testing.T) {
+	cfg := &Config{Ports: &PortsConfig{RDP: 70000}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected out-of-range error")
+	}
+}
+
+func TestValidate_PortsDuplicate(t *testing.T) {
+	cfg := &Config{Ports: &PortsConfig{Gossh: 20022, OpenSSH: 20022}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected duplicate-port error")
+	}
+}
+
+func TestParse_Hostname(t *testing.T) {
+	cfg, err := Parse([]byte("hostname: dev-win11\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	opts, err := cfg.ToBuildOpts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Hostname != "dev-win11" {
+		t.Fatalf("hostname = %q", opts.Hostname)
+	}
+}
+
+func TestValidate_HostnameInvalid(t *testing.T) {
+	for _, h := range []string{"way-too-long-hostname", "has_underscore", "has.dot", "12345"} {
+		cfg := &Config{Hostname: h}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("hostname %q: expected error", h)
+		}
+	}
+}

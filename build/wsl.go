@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/build/buildopts"
 	"github.com/devcell-sh/go-winkit/gosshd"
 	"github.com/devcell-sh/go-winkit/media/isokit"
 	"github.com/devcell-sh/go-winkit/s6"
@@ -32,16 +33,14 @@ const (
 	wslDiskSizeGB = 64
 	wslMemoryGB   = 6
 	wslCPUs       = 4
-	// wslSSHPort (host) forwards to the gosshd provisioning server on
-	// wslGosshdGuestPort. gosshd is brought up by a specialize onstart SYSTEM
-	// task — independent of the fragile first-logon bootstrap — so the host has
-	// a reachable, fully-elevated channel to provision over even if bootstrap
-	// fails. wslOpenSSHHostPort forwards to the Windows OpenSSH the image
-	// ships on :22 (installed by the bootstrap), for separate verification.
-	wslSSHPort         = 20022
+	// The gossh host port (buildopts.Ports) forwards to the gosshd
+	// provisioning server on wslGosshdGuestPort. gosshd is brought up by a
+	// specialize onstart SYSTEM task — independent of the fragile
+	// first-logon bootstrap — so the host has a reachable, fully-elevated
+	// channel to provision over even if bootstrap fails. The openssh host
+	// port forwards to the Windows OpenSSH the image ships on :22
+	// (installed by the bootstrap), for separate verification.
 	wslGosshdGuestPort = 2222
-	wslOpenSSHHostPort = 20122
-	wslRDPPort         = 23389
 	wslInstallWait     = 4 * time.Hour
 	wslContinueWait    = 10 * time.Minute
 	wslSSHPollEvery    = 30 * time.Second
@@ -52,17 +51,17 @@ const (
 )
 
 // wslGosshdHostPort is the host-side port forwarded to the gosshd provisioning
-// channel (guest wslGosshdGuestPort). It defaults to wslSSHPort but can be
-// overridden with WINKIT_E2E_SSH_PORT when 20022 is already bound on the host
-// (e.g. a leftover QEMU still holding it), which otherwise makes QEMU abort at
-// launch with "Could not set up host forwarding rule".
-func wslGosshdHostPort() uint16 {
+// channel (guest wslGosshdGuestPort). It defaults to the configured gossh port
+// but can be overridden with WINKIT_E2E_SSH_PORT when that port is already
+// bound on the host (e.g. a leftover QEMU still holding it), which otherwise
+// makes QEMU abort at launch with "Could not set up host forwarding rule".
+func wslGosshdHostPort(ports buildopts.Ports) uint16 {
 	if v := os.Getenv("WINKIT_E2E_SSH_PORT"); v != "" {
 		if p, err := strconv.ParseUint(v, 10, 16); err == nil && p > 0 {
 			return uint16(p)
 		}
 	}
-	return wslSSHPort
+	return ports.GosshOrDefault()
 }
 
 func vzVNCPort() uint16 {
@@ -159,7 +158,7 @@ func ResolveBackend() (vm.VMBackend, string, error) {
 // with the WSL1 feature enabled in specialize and the distro imported at first
 // logon. The install uses the fastest available accelerator (HVF on Mac,
 // KVM on Linux, TCG fallback); WSL1 needs no hypervisor features.
-func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, services []s6.Service, displayType string) error {
+func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, services []s6.Service, displayType string, ports buildopts.Ports, hostname string) error {
 	// --accel flag wins; then WINKIT_E2E_ACCEL env; then the best available
 	// accelerator for the host (HVF on Mac, KVM on Linux, TCG fallback).
 	if accel == "" {
@@ -178,7 +177,7 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	// scratch, for iterating on post-boot config / manual tests. Env-driven so
 	// `WINKIT_E2E_DISK=<base> task test:wsl` selects it without a new entry point.
 	if base := os.Getenv("WINKIT_E2E_DISK"); base != "" {
-		return continueWSLImage(ctx, base, dest, virtioISO, workDir, logger, accel, backendName, backend)
+		return continueWSLImage(ctx, base, dest, virtioISO, workDir, logger, accel, backendName, backend, ports, hostname)
 	}
 
 	// --- Phase 0: offline host build (files only) ---
@@ -308,6 +307,9 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	}
 
 	cfg := wslAnswerConfig(pwshFiles, filepath.Base(opensshZip), opensshData, "gosshd.exe", gosshdData)
+	if hostname != "" {
+		cfg.Hostname = hostname
+	}
 	cfg.WSLPayloadData = wslData
 	wslWinPEAgentConfig(&cfg, virtioISO, logger)
 	if backendName == "vz" {
@@ -388,10 +390,10 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		CPUs:            wslCPUs,
 		MemoryGB:        wslMemoryGB,
 		OutputDir:       installOut,
-		SSHPort:         wslGosshdHostPort(),
+		SSHPort:         wslGosshdHostPort(ports),
 		SSHGuestPort:    wslGosshdGuestPort,
-		OpenSSHHostPort: wslOpenSSHHostPort,
-		RDPPort:         wslRDPPort,
+		OpenSSHHostPort: ports.OpenSSHOrDefault(),
+		RDPPort:         ports.RDPOrDefault(),
 		Accel:           accel,
 	}
 	switch backendName {
@@ -426,7 +428,7 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	// SYSTEM, so feature-enable is fully elevated with no UAC filtering. The
 	// Windows account creds (cfg.Username/Password) are for autologon and the
 	// Windows OpenSSH the bootstrap installs on :22, verified separately below.
-	provAddr := fmt.Sprintf("127.0.0.1:%d", wslGosshdHostPort())
+	provAddr := fmt.Sprintf("127.0.0.1:%d", wslGosshdHostPort(ports))
 	provUser, provPass := gosshd.DefaultUser, gosshd.DefaultPassword
 	logger.Info("waiting for gosshd provisioning channel", "addr", provAddr, "deadline", wslInstallWait)
 	if err := waitForWindowsSSH(ctx, provAddr, provUser, provPass, wslInstallWait, logger, machine.Done()); err != nil {
@@ -437,16 +439,17 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	logger.Info("provisioning channel up (gosshd, SYSTEM)")
 
 	// --- verify: SSH + RDP; the delivered Windows OpenSSH on :22 ---
-	if err := wslVerify(ctx, provAddr, provUser, provPass, wslRDPPort, logger); err != nil {
+	osshAddr := fmt.Sprintf("127.0.0.1:%d", ports.OpenSSHOrDefault())
+	if err := wslVerify(ctx, provAddr, provUser, provPass, ports.RDPOrDefault(), logger); err != nil {
 		return fmt.Errorf("post-install verification: %w", err)
 	}
-	wslVerifyDeliveredSSH(ctx, cfg.Username, cfg.Password, logger)
+	wslVerifyDeliveredSSH(ctx, osshAddr, cfg.Username, cfg.Password, logger)
 
 	// --- verify: the WSL1 distro the bootstrap imported ---
 	// Over the delivered OpenSSH (:22) with the user's own account: WSL
 	// registrations are per-user, so gosshd's SYSTEM session cannot see them.
 	if len(wslData) > 0 {
-		if err := wslVerifyDistro(ctx, cfg.Username, cfg.Password, cfg.DistroName, distro.VerifyCommand, distro.VerifyContains, logger); err != nil {
+		if err := wslVerifyDistro(ctx, osshAddr, cfg.Username, cfg.Password, cfg.DistroName, distro.VerifyCommand, distro.VerifyContains, logger); err != nil {
 			return fmt.Errorf("%s distro verification: %w", cfg.DistroName, err)
 		}
 	}
@@ -457,7 +460,6 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	// (writing into an EXISTING file), which only a non-SYSTEM session can
 	// meaningfully test (run 20260903T181714).
 	if sftpSrv != nil {
-		osshAddr := fmt.Sprintf("127.0.0.1:%d", wslOpenSSHHostPort)
 		if err := wslVerifySFTP(ctx, osshAddr, cfg.Username, cfg.Password, sftpSrv, sharedDir, logger); err != nil {
 			return fmt.Errorf("SFTP share verification (as %s over delivered OpenSSH): %w", cfg.Username, err)
 		}
@@ -466,9 +468,9 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	// --- interactive hold or tear down ---
 	if os.Getenv("WINKIT_E2E_TEARDOWN") == "false" {
 		logger.Info("WINKIT_E2E_TEARDOWN=false — VM stays running for manual testing")
-		logger.Info("  gosshd:   127.0.0.1:" + fmt.Sprintf("%d", wslGosshdHostPort()))
-		logger.Info("  RDP:      127.0.0.1:" + fmt.Sprintf("%d", wslRDPPort))
-		logger.Info("  OpenSSH:  127.0.0.1:" + fmt.Sprintf("%d", wslOpenSSHHostPort))
+		logger.Info("  gosshd:   127.0.0.1:" + fmt.Sprintf("%d", wslGosshdHostPort(ports)))
+		logger.Info("  RDP:      127.0.0.1:" + fmt.Sprintf("%d", ports.RDPOrDefault()))
+		logger.Info("  OpenSSH:  " + osshAddr)
 		logger.Info("Ctrl-C to shut down")
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -511,8 +513,7 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 // the build, while the delivered OpenSSH only needs to be present for the
 // image's own consumers. A failure is logged, not returned, so a transient
 // first-logon OpenSSH hiccup does not fail an otherwise-good build.
-func wslVerifyDeliveredSSH(ctx context.Context, user, pass string, logger interface{ Info(string, ...any) }) {
-	addr := fmt.Sprintf("127.0.0.1:%d", wslOpenSSHHostPort)
+func wslVerifyDeliveredSSH(ctx context.Context, addr, user, pass string, logger interface{ Info(string, ...any) }) {
 	who, _, code, err := sshRun(ctx, addr, user, pass, "whoami")
 	if err != nil || code != 0 {
 		logger.Info("delivered Windows OpenSSH (:22) not verified (non-fatal)", "addr", addr, "err", fmt.Sprint(err), "code", code)
@@ -529,8 +530,7 @@ func wslVerifyDeliveredSSH(ctx context.Context, user, pass string, logger interf
 // Connects over the delivered Windows OpenSSH (:22) as the real user: WSL
 // registrations are per-user, and the import may still be in flight when the
 // provisioning channel comes up, hence the generous retry.
-func wslVerifyDistro(ctx context.Context, user, pass, distro, verifyCmd, verifyContains string, logger interface{ Info(string, ...any) }) error {
-	addr := fmt.Sprintf("127.0.0.1:%d", wslOpenSSHHostPort)
+func wslVerifyDistro(ctx context.Context, addr, user, pass, distro, verifyCmd, verifyContains string, logger interface{ Info(string, ...any) }) error {
 	deadline := time.Now().Add(10 * time.Minute)
 	var lastOut, lastErr string
 	for {
@@ -611,7 +611,10 @@ func wslTeardownGosshd(ctx context.Context, addr, user, pass string, logger inte
 // and do manual tests, then bakes the session's changes into a standalone
 // wsl-baked.qcow2 on shutdown. This needs gosshd on the base (build it with
 // WINKIT_E2E_TEARDOWN=false), since gosshd is the reachable channel.
-func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string, logger *slog.Logger, accel, backendName string, backend vm.VMBackend) error {
+func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string, logger *slog.Logger, accel, backendName string, backend vm.VMBackend, ports buildopts.Ports, hostname string) error {
+	if hostname == "" {
+		hostname = unattend.DefaultConfig().Hostname
+	}
 	if accel == "" {
 		accel = os.Getenv("WINKIT_E2E_ACCEL")
 	}
@@ -704,13 +707,13 @@ func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string
 		CPUs:            wslCPUs,
 		MemoryGB:        wslMemoryGB,
 		Accel:           accel,
-		SSHPort:         wslGosshdHostPort(),
+		SSHPort:         wslGosshdHostPort(ports),
 		SSHGuestPort:    wslGosshdGuestPort,
-		OpenSSHHostPort: wslOpenSSHHostPort,
-		RDPPort:         wslRDPPort,
+		OpenSSHHostPort: ports.OpenSSHOrDefault(),
+		RDPPort:         ports.RDPOrDefault(),
 		SSHHost:         bindHost,
 		SharedDir:       os.Getenv("WINKIT_E2E_SHARED_DIR"),
-		SMBIOSSerial:    unattend.DefaultConfig().Hostname,
+		SMBIOSSerial:    hostname,
 	}
 	switch backendName {
 	case "qemu":
@@ -729,7 +732,7 @@ func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string
 
 	// The orchestrator connects over the Mac's own loopback; the 0.0.0.0 bind is
 	// only so the container can also reach it.
-	provAddr := fmt.Sprintf("127.0.0.1:%d", wslGosshdHostPort())
+	provAddr := fmt.Sprintf("127.0.0.1:%d", wslGosshdHostPort(ports))
 	provUser, provPass := gosshd.DefaultUser, gosshd.DefaultPassword
 	logger.Info("continue mode: waiting for gosshd provisioning channel", "addr", provAddr)
 
@@ -743,7 +746,7 @@ func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string
 		logger.Info("provisioning channel up (gosshd, SYSTEM)")
 	} else {
 		dc := unattend.DefaultConfig()
-		osshAddr := fmt.Sprintf("127.0.0.1:%d", wslOpenSSHHostPort)
+		osshAddr := fmt.Sprintf("127.0.0.1:%d", ports.OpenSSHOrDefault())
 		logger.Info("gosshd not reachable (torn out of baked images at build time); falling back to the delivered Windows OpenSSH", "addr", osshAddr, "user", dc.Username)
 		if err2 := waitForWindowsSSH(ctx, osshAddr, dc.Username, dc.Password, wslContinueWait-4*time.Minute, logger, machine.Done()); err2 == nil {
 			provUp = true
@@ -762,7 +765,7 @@ func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string
 	// down — log it and keep going. Only the non-interactive (CI) path treats a
 	// verify failure as fatal.
 	if gosshdUp {
-		if err := wslVerify(ctx, provAddr, provUser, provPass, wslRDPPort, logger); err != nil {
+		if err := wslVerify(ctx, provAddr, provUser, provPass, ports.RDPOrDefault(), logger); err != nil {
 			if !interactive {
 				return fmt.Errorf("continue-mode verification: %w", err)
 			}
@@ -779,12 +782,12 @@ func continueWSLImage(ctx context.Context, base, dest, virtioISO, workDir string
 	if interactive {
 		logger.Info("interactive: VM is up — connect from this container via host.docker.internal:")
 		if viaGosshd {
-			logger.Info("  gosshd (SYSTEM):       host.docker.internal:" + fmt.Sprint(wslGosshdHostPort()) + fmt.Sprintf("  (user %s / pass %s → guest :%d)", provUser, provPass, wslGosshdGuestPort))
+			logger.Info("  gosshd (SYSTEM):       host.docker.internal:" + fmt.Sprint(wslGosshdHostPort(ports)) + fmt.Sprintf("  (user %s / pass %s → guest :%d)", provUser, provPass, wslGosshdGuestPort))
 		} else {
 			logger.Info("  gosshd:                NOT reachable (torn out at build time; delivered OpenSSH below is the channel)")
 		}
-		logger.Info("  Windows OpenSSH:       host.docker.internal:" + fmt.Sprint(wslOpenSSHHostPort) + "  (guest :22)")
-		logger.Info("  RDP:                   host.docker.internal:" + fmt.Sprint(wslRDPPort))
+		logger.Info("  Windows OpenSSH:       host.docker.internal:" + fmt.Sprint(ports.OpenSSHOrDefault()) + "  (guest :22)")
+		logger.Info("  RDP:                   host.docker.internal:" + fmt.Sprint(ports.RDPOrDefault()))
 		if qmpSock := qemu.QMPSocketFromVM(machine); qmpSock != "" {
 			logger.Info("  screenshots:           " + filepath.Join(installOut, "screenshots"))
 			logger.Info("  QMP:                   " + qmpSock)

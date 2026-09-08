@@ -23,10 +23,7 @@ const (
 	baseDiskSizeGB     = 64
 	baseMemoryGB       = 6
 	baseCPUs           = 4
-	baseSSHPort        = 20022
 	baseGosshdPort     = 2222
-	baseOpenSSHPort    = 20122
-	baseRDPPort        = 23389
 	baseInstallWait    = 4 * time.Hour
 	baseSSHPollEvery   = 30 * time.Second
 	baseBootVolumeSize = 4 * 1024 * 1024 * 1024
@@ -38,6 +35,11 @@ const (
 func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, opts *buildopts.BuildOpts, logger *slog.Logger, noCache bool, accel, displayType string) error {
 	if accel == "" {
 		accel = qemu.DefaultAccel()
+	}
+
+	var ports buildopts.Ports
+	if opts != nil {
+		ports = opts.Ports
 	}
 
 	backend, backendName, err := ResolveBackend()
@@ -90,6 +92,9 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 	// Apply features from BuildOpts.
 	if len(opts.Features) > 0 {
 		cfg.Features = opts.Features
+	}
+	if opts.Hostname != "" {
+		cfg.Hostname = opts.Hostname
 	}
 
 	wslWinPEAgentConfig(&cfg, virtioISO, logger)
@@ -147,10 +152,10 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 		CPUs:            baseCPUs,
 		MemoryGB:        baseMemoryGB,
 		OutputDir:       installOut,
-		SSHPort:         baseSSHPort,
+		SSHPort:         ports.GosshOrDefault(),
 		SSHGuestPort:    baseGosshdPort,
-		OpenSSHHostPort: baseOpenSSHPort,
-		RDPPort:         baseRDPPort,
+		OpenSSHHostPort: ports.OpenSSHOrDefault(),
+		RDPPort:         ports.RDPOrDefault(),
 		Accel:           accel,
 	}
 	switch backendName {
@@ -176,7 +181,7 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 	go tailStream(filepath.Join(machine.OutputDir(), "qemu.log"), "qemu", logger, stopTail)
 
 	// --- Wait for SSH ---
-	provAddr := fmt.Sprintf("127.0.0.1:%d", baseSSHPort)
+	provAddr := fmt.Sprintf("127.0.0.1:%d", ports.GosshOrDefault())
 	provUser, provPass := gosshd.DefaultUser, gosshd.DefaultPassword
 	logger.Info("waiting for gosshd provisioning channel", "addr", provAddr, "deadline", baseInstallWait)
 	if err := waitForWindowsSSH(ctx, provAddr, provUser, provPass, baseInstallWait, logger, machine.Done()); err != nil {
