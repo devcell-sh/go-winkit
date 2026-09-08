@@ -9,6 +9,9 @@ import (
 	"github.com/devcell-sh/go-winkit/internal/iotrace"
 )
 
+// version is stamped by release builds via -ldflags "-X ...cli.version=".
+var version = "dev"
+
 // NewRootCmd builds the winkit command tree.
 func NewRootCmd() *cobra.Command {
 	var (
@@ -17,8 +20,9 @@ func NewRootCmd() *cobra.Command {
 	)
 
 	root := &cobra.Command{
-		Use:   "winkit",
-		Short: "Build Windows environments from code",
+		Use:     "winkit",
+		Version: version,
+		Short:   "Build Windows environments from code",
 		Long: "winkit builds Windows environments from code: fetches install media,\n" +
 			"turns it into something bootable, and prepares the answer files and\n" +
 			"payloads needed to run the whole path unattended.\n\n" +
@@ -55,6 +59,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(
 		newInitCmd(),
 		newBuildCmd(),
+		newVagrantfileCmd(),
 		newFetchCmd(),
 		newISOCmd(),
 		newUnattendCmd(),
