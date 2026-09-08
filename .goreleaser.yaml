@@ -1,0 +1,119 @@
+version: 2
+
+project_name: winkit
+
+# Release builds run on macOS: the darwin binary needs CGO for wimlib
+# (dynamic, against the brew-installed libwim — the cask declares the
+# wimlib formula dependency), while the linux binaries are CGO-free and
+# cross-compile fine from a mac.
+before:
+  hooks:
+    # Prebuild the gosshd guest binaries and embed them (winpe/embedded),
+    # so the installed winkit can provision images from any directory —
+    # same as `task build`.
+    - env CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -o ./winpe/embedded/gosshd_windows_arm64.exe ./gosshd/cmd/gosshd
+    - env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o ./winpe/embedded/gosshd_windows_amd64.exe ./gosshd/cmd/gosshd
+
+builds:
+  - id: winkit-darwin
+    main: ./cmd/winkit
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -tags=wimlib
+    ldflags:
+      - -s -w
+        -X 'github.com/devcell-sh/go-winkit/internal/cli.version={{.Version}}'
+
+  - id: winkit-linux
+    main: ./cmd/winkit
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+        -X 'github.com/devcell-sh/go-winkit/internal/cli.version={{.Version}}'
+
+archives:
+  - id: release_archive
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+release:
+  github:
+    owner: devcell-sh
+    name: go-winkit
+  draft: true
+  replace_existing_draft: true
+  make_latest: false
+
+changelog:
+  sort: asc
+  use: git
+  groups:
+    - title: "Features"
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: "Bug Fixes"
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: "Chores"
+      regexp: '^.*?chore(\(.+\))??!?:.+$'
+      order: 2
+    - title: "Tests"
+      regexp: '^.*?test(\(.+\))??!?:.+$'
+      order: 3
+    - title: "Other"
+      order: 999
+  filters:
+    exclude:
+      - 'Merge pull request'
+      - 'Merge branch'
+
+checksum:
+  name_template: "{{ .ProjectName }}-checksums.txt"
+
+homebrew_casks:
+  - name: winkit
+    repository:
+      owner: devcell-sh
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    url:
+      template: "https://github.com/devcell-sh/go-winkit/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    commit_author:
+      name: Dmitry Kireev
+      email: dmitry@atd.sh
+    homepage: "https://github.com/devcell-sh/go-winkit"
+    description: "Build Windows environments from code"
+    dependencies:
+      - formula: wimlib
+    binaries: ["winkit"]
+
+  - name: "winkit@{{ .Version }}"
+    repository:
+      owner: devcell-sh
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    url:
+      template: "https://github.com/devcell-sh/go-winkit/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    commit_author:
+      name: Dmitry Kireev
+      email: dmitry@atd.sh
+    homepage: "https://github.com/devcell-sh/go-winkit"
+    description: "Build Windows environments from code"
+    dependencies:
+      - formula: wimlib
+    binaries: ["winkit"]
