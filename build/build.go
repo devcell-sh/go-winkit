@@ -70,8 +70,14 @@ func (c Config) logger() *slog.Logger {
 // WSL performs a full unattended install with WSL enabled and a distro
 // imported, verifying SSH/RDP, the imported distro, and the SFTP share.
 func WSL(ctx context.Context, c Config) error {
+	var ports buildopts.Ports
+	hostname := ""
+	if c.Opts != nil {
+		ports = c.Opts.Ports
+		hostname = c.Opts.Hostname
+	}
 	return wslImage(ctx, c.Dest, c.CacheDir, c.WindowsISO, c.VirtIOISO, c.WorkDir,
-		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.WSLServices, c.DisplayType)
+		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.WSLServices, c.DisplayType, ports, hostname)
 }
 
 // Base performs a full unattended install running the hooks and features

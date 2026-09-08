@@ -25,6 +25,7 @@ func newStartCmd() *cobra.Command {
 	var (
 		configFile string
 		name       string
+		hostname   string
 		accel      string
 		vnc        bool
 		foreground bool
@@ -91,13 +92,27 @@ func newStartCmd() *cobra.Command {
 			if memoryGB == 0 {
 				memoryGB = 6
 			}
+			// winkit.yaml supplies defaults; explicit flags win.
+			if cfg.Ports != nil {
+				if !cmd.Flags().Changed("ssh-port") && cfg.Ports.Gossh != 0 {
+					sshPort = uint16(cfg.Ports.Gossh)
+				}
+				if !cmd.Flags().Changed("rdp-port") && cfg.Ports.RDP != 0 {
+					rdpPort = uint16(cfg.Ports.RDP)
+				}
+			}
+			if hostname == "" {
+				hostname = cfg.Hostname
+			}
+			if hostname == "" {
+				hostname = unattend.DefaultConfig().Hostname
+			}
 			if sshPort == 0 {
 				sshPort = 20022
 			}
 			if rdpPort == 0 {
 				rdpPort = 23389
 			}
-			_ = cfg
 
 			var ctx context.Context
 			var stop context.CancelFunc
@@ -161,7 +176,7 @@ func newStartCmd() *cobra.Command {
 				SSHGuestPort:    2222,
 				OpenSSHHostPort: sshPort + 100,
 				RDPPort:         rdpPort,
-				SMBIOSSerial:    unattend.DefaultConfig().Hostname,
+				SMBIOSSerial:    hostname,
 			}
 
 			structuredLog := filepath.Join(outDir, "guest.jsonl")
@@ -247,6 +262,7 @@ func newStartCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&configFile, "file", "f", "", "config file (default: ./winkit.yaml)")
 	cmd.Flags().StringVar(&name, "name", "", "VM name (defaults to image filename without extension)")
+	cmd.Flags().StringVar(&hostname, "hostname", "", "guest computer/NetBIOS name via SMBIOS serial; renamed on next boot (default: winkit.yaml hostname, else winkit)")
 	cmd.Flags().StringVar(&accel, "accel", "", "QEMU accelerator (kvm, hvf, tcg)")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "run in foreground (default: background)")
 	cmd.Flags().BoolVar(&vnc, "vnc", false, "enable VNC display on port 5900")

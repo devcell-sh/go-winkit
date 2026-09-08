@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -52,13 +53,34 @@ type WSLConfig struct {
 	Services string `yaml:"services"`
 }
 
+// VagrantConfig controls the Vagrantfile emitted next to the built image.
+// Presence of the block enables emission (same as build --vagrant).
+type VagrantConfig struct {
+	// SSHPort is the host port vagrant-qemu forwards to the guest's
+	// OpenSSH. Overrides ports.openssh; when neither is set,
+	// vagrant-qemu's 50022 default applies.
+	SSHPort int `yaml:"ssh-port"`
+}
+
+// PortsConfig sets the host-side ports forwarded into the build VM
+// (and reused by the generated Vagrantfile). Zero values use the
+// defaults: rdp 23389, gossh 20022, openssh 20122.
+type PortsConfig struct {
+	RDP     int `yaml:"rdp"`
+	Gossh   int `yaml:"gossh"`
+	OpenSSH int `yaml:"openssh"`
+}
+
 type Config struct {
-	From     string        `yaml:"from"`
-	PE       bool          `yaml:"pe"`
-	WSL      *WSLConfig    `yaml:"wsl"`
-	Features []string      `yaml:"features"`
-	Files    []FileEntry   `yaml:"files"`
-	Commands commandsField `yaml:"-"`
+	From     string         `yaml:"from"`
+	Hostname string         `yaml:"hostname"`
+	PE       bool           `yaml:"pe"`
+	WSL      *WSLConfig     `yaml:"wsl"`
+	Features []string       `yaml:"features"`
+	Files    []FileEntry    `yaml:"files"`
+	Ports    *PortsConfig   `yaml:"ports"`
+	Vagrant  *VagrantConfig `yaml:"vagrant"`
+	Commands commandsField  `yaml:"-"`
 }
 
 type commandsField struct {
@@ -67,11 +89,14 @@ type commandsField struct {
 
 func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	type plain struct {
-		From     string      `yaml:"from"`
-		PE       bool        `yaml:"pe"`
-		WSL      *WSLConfig  `yaml:"wsl"`
-		Features []string    `yaml:"features"`
-		Files    []FileEntry `yaml:"files"`
+		From     string         `yaml:"from"`
+		Hostname string         `yaml:"hostname"`
+		PE       bool           `yaml:"pe"`
+		WSL      *WSLConfig     `yaml:"wsl"`
+		Features []string       `yaml:"features"`
+		Files    []FileEntry    `yaml:"files"`
+		Ports    *PortsConfig   `yaml:"ports"`
+		Vagrant  *VagrantConfig `yaml:"vagrant"`
 	}
 
 	var p plain
@@ -79,10 +104,13 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	c.From = p.From
+	c.Hostname = p.Hostname
 	c.PE = p.PE
 	c.WSL = p.WSL
 	c.Features = p.Features
 	c.Files = p.Files
+	c.Ports = p.Ports
+	c.Vagrant = p.Vagrant
 	c.Commands.Phases = make(map[string][]CommandEntry)
 
 	cmdNode := findKey(value, "commands")
@@ -149,6 +177,11 @@ func parseCommandList(node *yaml.Node) ([]CommandEntry, error) {
 	return result, nil
 }
 
+var (
+	hostnameRe  = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+	allDigitsRe = regexp.MustCompile(`^[0-9]+$`)
+)
+
 var defaultNames = []string{"winkit.yaml", "winkit.yml"}
 
 func Discover(dir string) (string, error) {
@@ -197,6 +230,30 @@ func (c *Config) Validate() error {
 	for phase := range c.Commands.Phases {
 		if !validPhases[phase] {
 			return fmt.Errorf("unknown command phase %q (want specialize, oobe, boot, or wsl)", phase)
+		}
+	}
+	if c.Hostname != "" {
+		// Windows computer names double as the NetBIOS name: max 15
+		// chars, letters/digits/hyphens, not all digits.
+		if len(c.Hostname) > 15 || !hostnameRe.MatchString(c.Hostname) || allDigitsRe.MatchString(c.Hostname) {
+			return fmt.Errorf("hostname %q invalid: 1-15 letters, digits, or hyphens, not all digits", c.Hostname)
+		}
+	}
+	if c.Ports != nil {
+		seen := map[int]string{}
+		for name, p := range map[string]int{
+			"rdp": c.Ports.RDP, "gossh": c.Ports.Gossh, "openssh": c.Ports.OpenSSH,
+		} {
+			if p < 0 || p > 65535 {
+				return fmt.Errorf("ports.%s: %d out of range (1-65535)", name, p)
+			}
+			if p == 0 {
+				continue
+			}
+			if other, dup := seen[p]; dup {
+				return fmt.Errorf("ports.%s and ports.%s both set to %d", other, name, p)
+			}
+			seen[p] = name
 		}
 	}
 	return nil

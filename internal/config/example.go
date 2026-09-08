@@ -110,4 +110,25 @@ from: windows/11-pro-arm64
 #       01_setup_packages.sh
 #
 # Scripts run in lexicographic order, after any inline commands.
+
+# Guest computer name (doubles as the NetBIOS name): 1-15 letters,
+# digits, or hyphens. Applied at build (unattend) and re-asserted on
+# every boot via the SMBIOS serial. Default: winkit
+#
+# hostname: winkit
+
+# Host-side ports forwarded into the build VM (also reused by the
+# generated Vagrantfile, see below). Defaults shown.
+#
+# ports:
+#   rdp: 23389       # guest :3389
+#   gossh: 20022     # gosshd provisioning channel, guest :2222
+#   openssh: 20122   # Windows OpenSSH, guest :22
+
+# Emit a vagrant-qemu Vagrantfile next to the built image (same as
+# build --vagrant). Boot the result with:
+#   vagrant plugin install vagrant-qemu && vagrant up
+#
+# vagrant:
+#   ssh-port: 50022   # host port forwarded to guest SSH (default 50022)
 `

@@ -66,12 +66,54 @@ type WSLConfig struct {
 	ServicesDir string
 }
 
+// Default host-side ports forwarded into the build VM: gosshd (the
+// provisioning channel, guest :2222), the delivered Windows OpenSSH
+// (guest :22), and RDP (guest :3389).
+const (
+	DefaultGosshPort   uint16 = 20022
+	DefaultOpenSSHPort uint16 = 20122
+	DefaultRDPPort     uint16 = 23389
+)
+
+// Ports are the host-side forward ports for the build VM. Zero values
+// fall back to the defaults above.
+type Ports struct {
+	RDP     uint16
+	Gossh   uint16
+	OpenSSH uint16
+}
+
+func (p Ports) RDPOrDefault() uint16 {
+	if p.RDP != 0 {
+		return p.RDP
+	}
+	return DefaultRDPPort
+}
+
+func (p Ports) GosshOrDefault() uint16 {
+	if p.Gossh != 0 {
+		return p.Gossh
+	}
+	return DefaultGosshPort
+}
+
+func (p Ports) OpenSSHOrDefault() uint16 {
+	if p.OpenSSH != 0 {
+		return p.OpenSSH
+	}
+	return DefaultOpenSSHPort
+}
+
 type BuildOpts struct {
 	From     string
 	PE       bool
 	WSL      *WSLConfig
 	Features []string
 	Hooks    []Hook
+	Ports    Ports
+	// Hostname is the guest computer name (doubles as the NetBIOS name);
+	// empty uses the unattend default.
+	Hostname string
 }
 
 func (o *BuildOpts) Validate() error {
