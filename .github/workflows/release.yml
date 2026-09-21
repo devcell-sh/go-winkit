@@ -17,7 +17,7 @@ jobs:
     name: GoReleaser
     # macOS runner: the darwin binary links wimlib via CGO; linux binaries
     # are CGO-free and cross-compile from here.
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     steps:
       - uses: actions/checkout@v5
         with:
