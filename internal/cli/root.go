@@ -26,8 +26,12 @@ func NewRootCmd() *cobra.Command {
 		Long: "winkit builds Windows environments from code: fetches install media,\n" +
 			"turns it into something bootable, and prepares the answer files and\n" +
 			"payloads needed to run the whole path unattended.\n\n" +
-			"WIM-modifying commands (build, winpe build, wim ...) need wimlib:\n" +
-			"build the CLI with -tags wimlib and have libwim installed.\n\n" +
+			"Use `winkit export` to generate standalone artifacts (ISOs, WIMs,\n" +
+			"answer files, Vagrantfiles) and `winkit debug` for developer\n" +
+			"inspection and pre-caching tools.\n\n" +
+			"WIM-modifying commands (build, export winpe build, export wim ...)\n" +
+			"need wimlib: build the CLI with -tags wimlib and have libwim\n" +
+			"installed.\n\n" +
 			"Pass --debug to trace every IO operation: files read and written,\n" +
 			"WIM images exported, images mastered, bytes downloaded. Building\n" +
 			"Windows media is mostly opaque IO against large binaries, so a\n" +
@@ -59,17 +63,11 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(
 		newInitCmd(),
 		newBuildCmd(),
-		newVagrantfileCmd(),
-		newFetchCmd(),
-		newISOCmd(),
-		newUnattendCmd(),
-		newWinPECmd(),
-		newWimCmd(),
-		newListFeaturesCmd(),
-		newDiagCmd(),
 		newStartCmd(),
 		newStopCmd(),
 		newStatusCmd(),
+		newExportCmd(),
+		newDebugGroupCmd(),
 	)
 	return root
 }

@@ -10,13 +10,13 @@ import (
 	"github.com/devcell-sh/go-winkit/winpe"
 )
 
-func newListFeaturesCmd() *cobra.Command {
+func newFeaturesCmd() *cobra.Command {
 	var (
 		image int
 		path  string
 	)
 	cmd := &cobra.Command{
-		Use:   "list-features <image.wim>",
+		Use:   "features <image.wim>",
 		Short: "Show the capabilities baked into a WIM image",
 		Long: "Inspects a WIM image and prints the winkit-relevant capabilities it\n" +
 			"carries, grouped by area: the winkit payload, the event-log/ETW\n" +

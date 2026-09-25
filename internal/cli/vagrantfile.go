@@ -13,13 +13,13 @@ import (
 	"github.com/devcell-sh/go-winkit/unattend"
 )
 
-func newVagrantfileCmd() *cobra.Command {
+func newVagrantCmd() *cobra.Command {
 	var (
 		configFile string
 		force      bool
 	)
 	cmd := &cobra.Command{
-		Use:   "vagrantfile [image.qcow2]",
+		Use:   "vagrant [image.qcow2]",
 		Short: "Generate a vagrant-qemu Vagrantfile for an already-built image",
 		Long: "Generates a vagrant-qemu Vagrantfile next to an existing qcow2 image,\n" +
 			"without rebuilding it (build --vagrant does both). Ports come from\n" +

@@ -14,7 +14,7 @@ import (
 
 func runVagrantfile(t *testing.T, stdin string, args ...string) (string, error) {
 	t.Helper()
-	cmd := newVagrantfileCmd()
+	cmd := newVagrantCmd()
 	cmd.SetIn(strings.NewReader(stdin))
 	var out bytes.Buffer
 	cmd.SetOut(&out)
