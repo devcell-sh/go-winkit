@@ -79,7 +79,7 @@ func TestToBuildOpts_PEConversion(t *testing.T) {
 	}
 }
 
-func TestToBuildOpts_PEWSLError(t *testing.T) {
+func TestToBuildOpts_PEWSLConversion(t *testing.T) {
 	cfg := &Config{
 		From:     "windows/11-pro-arm64",
 		PE:       true,
@@ -87,9 +87,15 @@ func TestToBuildOpts_PEWSLError(t *testing.T) {
 		Commands: commandsField{Phases: make(map[string][]CommandEntry)},
 	}
 
-	_, err := cfg.ToBuildOpts()
-	if err == nil {
-		t.Fatal("expected PE+WSL error")
+	opts, err := cfg.ToBuildOpts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.PE || opts.WSL == nil || opts.WSL.Image != "alpine" {
+		t.Fatalf("PE+WSL conversion = %+v", opts)
+	}
+	if opts.Stage() != buildopts.StagePE {
+		t.Fatalf("PE+WSL stage = %q, want %q", opts.Stage(), buildopts.StagePE)
 	}
 }
 

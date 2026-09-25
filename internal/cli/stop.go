@@ -95,10 +95,9 @@ func removeState(stateDir string, st *vmstate.State) error {
 		if dst, err := os.OpenFile(filepath.Join(st.OutputDir, "run.jsonl"),
 			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 			for src, ns := range map[string]string{
-				"guest.jsonl":        "guest",
-				"guest-progress.log": "progress",
-				"serial.log":         "serial",
-				"qemu.log":           "qemu",
+				"guest.jsonl": "guest",
+				"serial.log":  "serial",
+				"qemu.log":    "qemu",
 			} {
 				_ = winpe.AppendStreamJSONL(dst, filepath.Join(st.OutputDir, src), ns)
 			}

@@ -42,9 +42,8 @@ func TestGenerateBootstrap_LoadsRequestedDrivers(t *testing.T) {
 }
 
 func TestGenerateBootstrap_ReportsProgressToSerial(t *testing.T) {
-	port := `\\.\Global\` + ProgressPortName
-	out := string(GenerateBootstrap(PayloadConfig{ProgressPort: port}))
-	assert.Contains(t, out, port, "must reference the progress port")
+	out := string(GenerateBootstrap(PayloadConfig{SerialPort: GuestSerialPort}))
+	assert.Contains(t, out, GuestSerialPort, "must reference the serial port")
 	assert.Contains(t, out, "winkit:", "must emit winkit progress markers")
 	assert.Contains(t, out, "Out-File", "must use Out-File for progress output")
 }
@@ -79,19 +78,18 @@ func TestGenerateAgent_PollsCommandFileAndWritesResult(t *testing.T) {
 // locations to the structured port as JSON, open the port lazily (the
 // vioserial driver drvloads after the agent starts), and emit none of it
 // when no structured port is configured.
-func TestGenerateAgent_TeesPantherLogsToStructuredPort(t *testing.T) {
-	port := `\\.\Global\` + StructuredPortName
-	out := string(GenerateAgent(PayloadConfig{StructuredPort: port}))
-	assert.Contains(t, out, port)
+func TestGenerateAgent_TeesPantherLogsToSerialPort(t *testing.T) {
+	out := string(GenerateAgent(PayloadConfig{SerialPort: GuestSerialPort}))
+	assert.Contains(t, out, GuestSerialPort)
 	assert.Contains(t, out, `winkit-tee-log 'X:\Windows\Panther\setupact.log' 'setupact'`)
 	assert.Contains(t, out, `winkit-tee-log 'X:\Windows\Panther\setuperr.log' 'setuperr'`)
 	assert.Contains(t, out, `winkit-tee-log 'X:\$windows.~bt\Sources\Panther\setupact.log' 'setupact'`)
 	assert.Contains(t, out, `winkit-tee-log 'X:\$windows.~bt\Sources\Panther\setuperr.log' 'setuperr'`)
 	assert.Contains(t, out, "ConvertTo-Json -Compress", "lines must ship as JSON for build.jsonl")
-	assert.Contains(t, out, "winkit-struct-open", "the port must open lazily — vioserial loads after the agent starts")
+	assert.Contains(t, out, "winkit-serial-open", "the port must open lazily — PCI serial may not enumerate immediately")
 
 	plain := string(GenerateAgent(PayloadConfig{}))
-	assert.NotContains(t, plain, "winkit-tee-log", "no tee without a structured port")
+	assert.NotContains(t, plain, "winkit-tee-log", "no tee without a serial port")
 }
 
 // A command that dies with a terminating error used to land only in the
@@ -99,7 +97,7 @@ func TestGenerateAgent_TeesPantherLogsToStructuredPort(t *testing.T) {
 // looked like a hang and burned its whole deadline before revealing a
 // one-line error.
 func TestGenerateAgent_StreamsCaughtErrorsToProgress(t *testing.T) {
-	out := string(GenerateAgent(PayloadConfig{ProgressPort: `\\.\Global\winkit`}))
+	out := string(GenerateAgent(PayloadConfig{SerialPort: GuestSerialPort}))
 
 	catchIdx := strings.LastIndex(out, "} catch {")
 	require.Greater(t, catchIdx, 0, "agent must catch command failures")
@@ -118,8 +116,8 @@ func TestGenerateAgent_StreamsCaughtErrorsToProgress(t *testing.T) {
 // a console screenshot.
 func TestGenerateBootstrap_ReportsDrvLoadExitCodes(t *testing.T) {
 	out := string(GenerateBootstrap(PayloadConfig{
-		ProgressPort: `\\.\Global\winkit`,
-		DriverINFs:   []string{`X:\winkit\drivers\vioserial\vioser.inf`},
+		SerialPort: GuestSerialPort,
+		DriverINFs: []string{`X:\winkit\drivers\vioscsi\vioscsi.inf`},
 	}))
 
 	assert.Contains(t, out, "$LASTEXITCODE",
@@ -180,7 +178,7 @@ func TestGenerateShellINI_NoSetup_RunsOnlyBootstrap(t *testing.T) {
 }
 
 func TestGenerateBootstrap_WPEInit(t *testing.T) {
-	out := string(GenerateBootstrap(PayloadConfig{WPEInit: true, ProgressPort: `\\.\Global\` + ProgressPortName}))
+	out := string(GenerateBootstrap(PayloadConfig{WPEInit: true, SerialPort: GuestSerialPort}))
 	wpeinitIdx := strings.Index(out, "wpeinit")
 	bootstrapIdx := strings.Index(out, "winkit:")
 	assert.Positive(t, wpeinitIdx, "must call wpeinit")
@@ -196,13 +194,24 @@ func TestGenerateAgentLauncher_CannotFailAndFindsTheAgent(t *testing.T) {
 	cmd := AgentLauncherCommand()
 	assert.True(t, strings.HasPrefix(cmd, "cmd.exe"),
 		"must use cmd.exe (stock WinPE lacks powershell.exe)")
-	assert.Contains(t, cmd, AgentScriptName)
-	assert.Contains(t, cmd, PwshVolDir+`\pwsh.exe`,
-		"must locate pwsh.exe on the answer volume")
-	assert.Contains(t, cmd, "start /min",
-		"must start agent detached so Setup is never blocked")
+	assert.Contains(t, cmd, AgentLauncherScript,
+		"must call the launcher script on the answer volume")
 	assert.True(t, strings.HasSuffix(cmd, `exit /b 0"`),
 		"must force exit /b 0: %s", cmd)
+
+	script := string(GenerateAgentLauncherScript())
+	assert.Contains(t, script, AgentScriptName,
+		"launcher script must reference the agent")
+	assert.Contains(t, script, PwshVolDir+`\pwsh.exe`,
+		"launcher script must locate pwsh.exe")
+	assert.Contains(t, script, "start /min",
+		"launcher script must start agent detached")
+	assert.Contains(t, script, AgentLauncherLog,
+		"launcher script must write diagnostics")
+	assert.Contains(t, script, "FAIL pwsh not found",
+		"launcher script must log when pwsh is missing")
+	assert.Contains(t, script, "FAIL agent script not found",
+		"launcher script must log when agent is missing")
 }
 
 func TestGenerateBootstrapCmd_ProbesForPwsh(t *testing.T) {
@@ -271,14 +280,12 @@ func TestGeneratedPS1_SyntaxValid(t *testing.T) {
 		t.Skip("pwsh not on PATH")
 	}
 
-	progressPort := `\\.\Global\` + ProgressPortName
 	cfg := PayloadConfig{
-		WPEInit:      true,
-		ProgressPort: progressPort,
-		PollSeconds:  5,
-		SyncAgent:    true,
+		WPEInit:    true,
+		SerialPort: GuestSerialPort,
+		PollSeconds: 5,
+		SyncAgent:   true,
 		DriverINFs: []string{
-			`X:\winkit\drivers\vioserial\vioser.inf`,
 			`X:\winkit\drivers\vioscsi\vioscsi.inf`,
 		},
 	}

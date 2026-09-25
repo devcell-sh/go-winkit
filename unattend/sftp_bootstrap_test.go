@@ -114,32 +114,39 @@ func TestGenerateBootstrapScript_SFTPFailureIsNonFatal(t *testing.T) {
 
 // The WSL1 rootfs ships as distro.wsl (byte-exact gzip) so the bootstrap's
 // drive scan finds it on the answer volume and imports it at first logon.
-func TestBuildAnswerVolume_ShipsWSLExact(t *testing.T) {
+func TestBuildAnswerVolume_ShipsWSL(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.WSLPayloadData = []byte("\x1f\x8b fake gzip tarball")
-	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	got, err := isokit.ReadFileFromFAT(imgPath, "/distro.wsl")
-	require.NoError(t, err, "distro.wsl must ship on the answer volume")
-	assert.Equal(t, string(cfg.WSLPayloadData), strings.TrimRight(string(got), "\x00"),
-		"distro.wsl must be byte-exact (trailing zeros aside)")
+	got, err := isokit.ReadFileFromISO(isoPath, "/distro.wsl")
+	require.NoError(t, err, "distro.wsl must ship on the ISO")
+	// ISO files are byte-exact (no cluster padding).
+	assert.Equal(t, cfg.WSLPayloadData, got,
+		"distro.wsl content must match")
 }
 
 // Both payloads must ship byte-exact: an MSI's signature and a zip's
 // end-of-central-directory scan both break on trailing padding.
-func TestBuildAnswerVolume_ShipsRcloneAndWinFspExact(t *testing.T) {
+func TestBuildAnswerVolume_ShipsRcloneAndWinFsp(t *testing.T) {
 	cfg := sftpConfig()
-	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	got, err := isokit.ReadFileFromFAT(imgPath, "/"+RclonePayloadName)
-	require.NoError(t, err, "rclone payload must ship on the answer volume")
-	assert.Equal(t, string(cfg.RclonePayloadData), strings.TrimRight(string(got), "\x00"),
-		"rclone zip must be byte-exact (trailing zeros aside)")
+	got, err := isokit.ReadFileFromISO(isoPath, "/"+RclonePayloadName)
+	require.NoError(t, err, "rclone payload must ship on the ISO")
+	// ISO files are byte-exact (no cluster padding).
+	assert.Equal(t, cfg.RclonePayloadData, got,
+		"rclone zip content must match")
 
-	got, err = isokit.ReadFileFromFAT(imgPath, "/"+WinFspPayloadName)
-	require.NoError(t, err, "WinFsp payload must ship on the answer volume")
-	assert.Equal(t, string(cfg.WinFspPayloadData), strings.TrimRight(string(got), "\x00"),
-		"WinFsp MSI must be byte-exact (trailing zeros aside)")
+	got, err = isokit.ReadFileFromISO(isoPath, "/"+WinFspPayloadName)
+	require.NoError(t, err, "WinFsp payload must ship on the ISO")
+	// ISO files are byte-exact (no cluster padding).
+	assert.Equal(t, cfg.WinFspPayloadData, got,
+		"WinFsp MSI content must match")
 }

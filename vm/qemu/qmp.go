@@ -60,6 +60,41 @@ func QMPScreendump(socketPath, outputFile string) error {
 	return nil
 }
 
+// QMPBlockReadBytes returns cumulative bytes read across all block
+// devices (query-blockstats rd_bytes summed). It is the disk-activity
+// half of a StallSignal: a guest that reads nothing for minutes is
+// wedged, whatever the screen shows.
+func QMPBlockReadBytes(socketPath string) (int64, error) {
+	conn, enc, dec, err := qmpHandshake(socketPath, 5*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	if err := enc.Encode(map[string]string{"execute": "query-blockstats"}); err != nil {
+		return 0, fmt.Errorf("QMP query-blockstats: %w", err)
+	}
+	var resp struct {
+		Return []struct {
+			Stats struct {
+				RdBytes int64 `json:"rd_bytes"`
+			} `json:"stats"`
+		} `json:"return"`
+		Error map[string]any `json:"error"`
+	}
+	if err := dec.Decode(&resp); err != nil {
+		return 0, fmt.Errorf("QMP query-blockstats response: %w", err)
+	}
+	if resp.Error != nil {
+		return 0, fmt.Errorf("QMP query-blockstats error: %v", resp.Error)
+	}
+	var total int64
+	for _, dev := range resp.Return {
+		total += dev.Stats.RdBytes
+	}
+	return total, nil
+}
+
 // QMPQuit sends the "quit" command which flushes block caches and exits.
 func QMPQuit(socketPath string) error {
 	conn, enc, _, err := qmpHandshake(socketPath, 5*time.Second)

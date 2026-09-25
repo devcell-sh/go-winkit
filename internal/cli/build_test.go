@@ -135,12 +135,13 @@ func TestBuild_WSLFlag(t *testing.T) {
 	assert.NotContains(t, err.Error(), "mutually exclusive")
 }
 
-func TestBuild_PEAndWSLMutuallyExclusive(t *testing.T) {
+func TestBuild_PEAndWSLSelectsWSL1PE(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "out.qcow2")
 	cacheDir := t.TempDir()
 
 	_, err := runBuild(t, "", dest, "--cache-dir", cacheDir, "--pe", "--wsl")
-	assert.ErrorContains(t, err, "mutually exclusive")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "mutually exclusive")
 }
 
 func TestBuild_WSLImageFlag(t *testing.T) {
@@ -162,12 +163,29 @@ func TestBuild_FromFlag(t *testing.T) {
 	assert.ErrorContains(t, err, "fetching Windows ISO")
 }
 
-func TestBuild_FromLocalISO(t *testing.T) {
+func TestBuild_FromLocalISO_Missing(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "out.qcow2")
 	cacheDir := t.TempDir()
 
+	// A local ISO source is accepted, so a missing file fails on the
+	// stat — not on "unsupported".
 	_, err := runBuild(t, "", dest, "--cache-dir", cacheDir, "--from", "./windows.iso")
-	assert.ErrorContains(t, err, "not yet supported")
+	assert.ErrorContains(t, err, "local media source")
+}
+
+func TestBuild_FromLocalISO_SkipsWindowsFetch(t *testing.T) {
+	dir := t.TempDir()
+	iso := filepath.Join(dir, "windows.iso")
+	require.NoError(t, os.WriteFile(iso, []byte("stub"), 0o644))
+	dest := filepath.Join(dir, "out.qcow2")
+	cacheDir := t.TempDir()
+
+	// The stub ISO gets past media resolution (no "fetching Windows
+	// ISO") and fails later — on the virtio fetch in the offline test
+	// env, or on the invalid ISO contents.
+	_, err := runBuild(t, "", dest, "--cache-dir", cacheDir, "--from", iso)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "fetching Windows ISO")
 }
 
 func TestBuild_FromLocalWIM(t *testing.T) {
@@ -175,7 +193,7 @@ func TestBuild_FromLocalWIM(t *testing.T) {
 	cacheDir := t.TempDir()
 
 	_, err := runBuild(t, "", dest, "--cache-dir", cacheDir, "--from", "./install.wim")
-	assert.ErrorContains(t, err, "not yet supported")
+	assert.ErrorContains(t, err, "not supported by the build pipeline")
 }
 
 func TestBuild_ConfigFileFlag(t *testing.T) {
@@ -198,6 +216,18 @@ func TestBuild_ConfigFileMissing(t *testing.T) {
 	assert.ErrorContains(t, err, "reading config")
 }
 
+func TestLoadBuildConfigAcceptsExampleDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "winkit.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("pe: true\nwsl:\n  image: alpine\n"), 0o644))
+
+	cfg, resolved, err := loadBuildConfig(dir)
+	require.NoError(t, err)
+	assert.Equal(t, path, resolved)
+	require.NotNil(t, cfg.WSL)
+	assert.Equal(t, "alpine", cfg.WSL.Image)
+}
+
 func TestBuild_CLIOverridesConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "winkit.yaml")
@@ -205,10 +235,9 @@ func TestBuild_CLIOverridesConfig(t *testing.T) {
 	dest := filepath.Join(dir, "out.qcow2")
 	cacheDir := t.TempDir()
 
-	// Config says pe:true but CLI says --wsl, which should override to WSL mode.
-	// pe+wsl would be mutually exclusive if both were set, but --wsl overrides.
-	// Actually, the flag override only sets WSL, it doesn't unset PE.
-	// So this should error with "mutually exclusive".
+	// Config says pe:true and the CLI enables WSL: together they select the
+	// standard WinPE+WSL1 builder.
 	_, err := runBuild(t, "", dest, "--cache-dir", cacheDir, "-f", cfgFile, "--wsl")
-	assert.ErrorContains(t, err, "mutually exclusive")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "mutually exclusive")
 }

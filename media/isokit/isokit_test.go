@@ -595,6 +595,71 @@ func TestEFIBootImage_MissingBoth(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestGoDiskFS_SizeBug_Vioser reproduces the go-diskfs v1.9.4 bug where
+// a file's directory entry size is recorded incorrectly when multiple
+// files are written and one of them (vioser.inf, 2623 bytes) ends up at
+// a position that triggers the rounding. Single-file images don't
+// trigger it; the bug depends on the disk layout created by other files.
+func TestGoDiskFS_SizeBug_Vioser(t *testing.T) {
+	// These sizes match the real answer volume that triggered the bug.
+	// The exact set matters: changing any size can shift vioser.inf to a
+	// safe position. If this test goes green after a go-diskfs upgrade,
+	// the bug is fixed and the workaround can be removed.
+	fileSets := []map[string][]byte{
+		// Set 1: realistic answer volume layout
+		{
+			"/autounattend.xml":             make([]byte, 7500),
+			"/startup.nsh":                  make([]byte, 150),
+			"/gosshd.exe":                   make([]byte, 3_200_000),
+			"/winkit-service.exe":           make([]byte, 3_700_000),
+			"/winkit-agent.marker":          []byte("winkit agent volume\r\n"),
+			"/drivers/vioserial/vioser.inf": make([]byte, 2623),
+			"/drivers/vioserial/vioser.sys": make([]byte, 43520),
+			"/drivers/vioserial/vioser.cat": make([]byte, 12074),
+			"/rclone.zip":                   make([]byte, 15_000_000),
+			"/winfsp.msi":                   make([]byte, 2_000_000),
+			"/distro.wsl":                   make([]byte, 5_000_000),
+		},
+		// Set 2: minimal set that may trigger the bug
+		{
+			"/big.bin":                      make([]byte, 3_000_000),
+			"/drivers/vioserial/vioser.inf": make([]byte, 2623),
+		},
+		// Set 3: vary companion sizes to shift layout
+		{
+			"/a.bin":                        make([]byte, 500_000),
+			"/b.bin":                        make([]byte, 1_234_567),
+			"/drivers/vioserial/vioser.inf": make([]byte, 2623),
+			"/c.bin":                        make([]byte, 800_000),
+		},
+	}
+
+	for i, files := range fileSets {
+		// Fill vioser.inf with recognizable content
+		inf := files["/drivers/vioserial/vioser.inf"]
+		for j := range inf {
+			inf[j] = byte('A' + j%26)
+		}
+
+		imgPath := filepath.Join(t.TempDir(), "test.img")
+		err := CreateFATImage(imgPath, files)
+		if err != nil {
+			t.Logf("set %d: CreateFATImage failed (acceptable): %v", i, err)
+			continue
+		}
+
+		got, err := ReadFileFromFAT(imgPath, "/drivers/vioserial/vioser.inf")
+		require.NoError(t, err, "set %d: read failed", i)
+
+		if len(got) != 2623 {
+			t.Errorf("set %d: go-diskfs size bug: wrote 2623 bytes, read back %d", i, len(got))
+		} else {
+			require.Equal(t, inf, got, "set %d: content mismatch", i)
+			t.Logf("set %d: OK (2623 bytes round-tripped correctly)", i)
+		}
+	}
+}
+
 func TestCreateFATImage_NeverSilentlyCorrupts(t *testing.T) {
 	// go-diskfs v1.9.4 mis-records the directory entry size when a file ends
 	// within 63 bytes of a cluster boundary, so reads return trailing padding.
@@ -617,6 +682,51 @@ func TestCreateFATImage_NeverSilentlyCorrupts(t *testing.T) {
 		require.NoError(t, readErr)
 		assert.Equal(t, payload, got, "size %d: image written but content differs", size)
 	}
+}
+
+// TestCreateFATImagePadded_NoFalsePositive verifies that patchFATFileSize
+// does not accidentally modify file DATA that matches the 8.3 name pattern.
+// Real PE drivers (e.g. vioser.sys) embed their .inf filename in resource
+// sections; if the 11-byte pattern "VIOSER  INF" appears at a 32-byte
+// boundary in the data area before the actual directory entry, the old
+// brute-force scan would patch the wrong location.
+func TestCreateFATImagePadded_NoFalsePositive(t *testing.T) {
+	sysBuf := make([]byte, 43520)
+	for i := range sysBuf {
+		sysBuf[i] = byte(i % 256)
+	}
+	// Plant the 8.3 pattern at several 32-byte boundaries in the .sys data.
+	for _, off := range []int{0x20, 0x100, 0x500, 0x1000} {
+		copy(sysBuf[off:], "VIOSER  INF")
+	}
+
+	infContent := make([]byte, 2623)
+	for i := range infContent {
+		infContent[i] = byte('A' + i%26)
+	}
+
+	padded := map[string][]byte{
+		"/autounattend.xml":             make([]byte, 7500),
+		"/gosshd.exe":                   make([]byte, 3_200_000),
+		"/winkit-service.exe":           make([]byte, 3_700_000),
+		"/drivers/vioserial/vioser.cat": make([]byte, 12074),
+		"/rclone.zip":                   make([]byte, 15_000_000),
+	}
+	exact := map[string][]byte{
+		"/drivers/vioserial/vioser.inf": infContent,
+		"/drivers/vioserial/vioser.sys": sysBuf,
+	}
+
+	imgPath := filepath.Join(t.TempDir(), "test.img")
+	require.NoError(t, CreateFATImagePadded(imgPath, padded, exact))
+
+	got, err := ReadFileFromFAT(imgPath, "/drivers/vioserial/vioser.inf")
+	require.NoError(t, err)
+	assert.Equal(t, infContent, got, "vioser.inf must round-trip byte-exact")
+
+	gotSys, err := ReadFileFromFAT(imgPath, "/drivers/vioserial/vioser.sys")
+	require.NoError(t, err)
+	assert.Equal(t, sysBuf, gotSys, "vioser.sys must round-trip byte-exact")
 }
 
 func TestCreateSimpleISO_RoundTripsExactBytes(t *testing.T) {

@@ -9,6 +9,23 @@ import (
 	"github.com/devcell-sh/go-winkit/unattend"
 )
 
+func TestWSL1RegistrationProbeRejectsVMModeAndQuotesName(t *testing.T) {
+	probe := wsl1RegistrationProbe("winkit's distro")
+
+	if !strings.Contains(probe, "$distro='winkit''s distro'") {
+		t.Fatalf("distro name is not PowerShell-quoted: %s", probe)
+	}
+	for _, required := range []string{
+		"$registration.Flags -band 0x8",
+		"VM_MODE clear",
+		"WSL1_REGISTRATION_OK",
+	} {
+		if !strings.Contains(probe, required) {
+			t.Errorf("registration probe missing %q", required)
+		}
+	}
+}
+
 // TestWSLAnswerConfig asserts the offline (Phase 0) answer config for the
 // wsl stage: RDP + OpenSSH payload + the netkvm/vioserial drivers registered
 // in specialize, and that it renders a schema-valid autounattend.
@@ -38,22 +55,16 @@ func TestWSLAnswerConfig(t *testing.T) {
 		t.Error("wsl config should keep the display awake during install")
 	}
 
-	// Drivers: netkvm (network, mandatory) + vioserial (build.jsonl), both
-	// installed via pnputil in specialize.
-	var haveNet, haveSerial bool
+	// Drivers: netkvm (network, mandatory), installed via pnputil in specialize.
+	// Serial communication uses PCI COM2 (inbox serial.sys).
+	var haveNet bool
 	for _, d := range cfg.VirtIODrivers {
 		if strings.Contains(d.INFRelPath, "netkvm.inf") {
 			haveNet = true
 		}
-		if strings.Contains(d.INFRelPath, "vioser.inf") {
-			haveSerial = true
-		}
 	}
 	if !haveNet {
 		t.Error("wsl config missing NetKVM driver (network → SSH/RDP)")
-	}
-	if !haveSerial {
-		t.Error("wsl config missing vioserial driver (build.jsonl)")
 	}
 
 	// The rendered autounattend must pass the package's own schema validation.
@@ -67,15 +78,22 @@ func TestWSLAnswerConfig(t *testing.T) {
 }
 
 // TestWSLAnswerVolumeBuilds runs the full offline Phase-0 answer-volume build
-// end to end (no VM), confirming the wsl config produces a real FAT image.
+// end to end (no VM), confirming the wsl config produces a real ISO and scratch
+// FAT image.
 func TestWSLAnswerVolumeBuilds(t *testing.T) {
 	cfg := wslAnswerConfig(nil, "openssh-arm64.zip", []byte("PK\x03\x04zip"), "gosshd.exe", []byte("MZgosshd"))
-	dest := filepath.Join(t.TempDir(), "autounattend.img")
-	if err := unattend.BuildAnswerVolume(cfg, dest); err != nil {
+	dir := t.TempDir()
+	isoPath := filepath.Join(dir, "autounattend.iso")
+	scratchPath := filepath.Join(dir, "scratch.img")
+	if err := unattend.BuildAnswerVolume(cfg, isoPath, scratchPath); err != nil {
 		t.Fatalf("BuildAnswerVolume: %v", err)
 	}
-	fi, err := os.Stat(dest)
-	if err != nil || fi.Size() == 0 {
-		t.Fatalf("answer volume not written: err=%v size=%d", err, fi.Size())
+	isoFi, err := os.Stat(isoPath)
+	if err != nil || isoFi.Size() == 0 {
+		t.Fatalf("answer ISO not written: err=%v size=%d", err, isoFi.Size())
+	}
+	scratchFi, err := os.Stat(scratchPath)
+	if err != nil || scratchFi.Size() == 0 {
+		t.Fatalf("scratch FAT image not written: err=%v size=%d", err, scratchFi.Size())
 	}
 }

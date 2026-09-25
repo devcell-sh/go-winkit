@@ -143,6 +143,14 @@ func wslVerifySFTP(ctx context.Context, addr, user, pass string, srv *sftpshare.
 				`$env:WSL_UTF8='1'; wsl.exe -d %s -u root -e /bin/sh -lc "s6-svstat /etc/s6/services/rclone-mount 2>&1; ls -l '/mnt/c/Program Files/rclone/' 2>&1"`, distro)); derr == nil {
 				logger.Warn("sftp verify: s6 rclone-mount state", "state", strings.TrimSpace(string(diag)))
 			}
+			if diag, _, _, derr := sshRun(ctx, addr, user, pass,
+				`Get-Content C:\winkit-s6.log -Tail 30 -ErrorAction SilentlyContinue`); derr == nil {
+				logger.Warn("sftp verify: winkit-s6.log tail", "log", strings.TrimSpace(string(diag)))
+			}
+			if diag, _, _, derr := sshRun(ctx, addr, user, pass,
+				`C:\winkit-service.exe status --name winkit-s6 2>&1`); derr == nil {
+				logger.Warn("sftp verify: winkit-s6 service status", "status", strings.TrimSpace(string(diag)))
+			}
 			return fmt.Errorf("guest cannot read probe through %s: (last: out=%q err=%q)", drive, lastOut, lastErr)
 		}
 		select {

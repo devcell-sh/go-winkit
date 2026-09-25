@@ -18,7 +18,7 @@ func TestBuildSetupBootArgv(t *testing.T) {
 	spec.SSHPort = 20022
 	spec.RDPPort = 23389
 
-	argv := BuildSetupBootArgv(spec, "/tmp/wsl-boot.qcow2", "/tmp/windows.iso", "/tmp/autounattend.img")
+	argv := BuildSetupBootArgv(spec, "/tmp/wsl-boot.qcow2", "/tmp/windows.iso", "/tmp/autounattend.iso", "/tmp/scratch.img")
 	joined := strings.Join(argv, " ")
 
 	// Boot volume: qcow2 FAT ESP, usb-storage, bootindex=1.
@@ -35,8 +35,9 @@ func TestBuildSetupBootArgv(t *testing.T) {
 	assert.NotContains(t, joined, "drive=wincd,removable=true,bus="+USBBusID+".0,bootindex")
 	assert.NotContains(t, joined, "scsi-cd")
 
-	// Answer volume + virtio ISO attached.
-	assert.Contains(t, joined, "file=/tmp/autounattend.img,format=raw,if=none,id=answer0")
+	// Answer ISO + scratch FAT + virtio ISO attached.
+	assert.Contains(t, joined, "file=/tmp/autounattend.iso,media=cdrom,if=none,id=answercd")
+	assert.Contains(t, joined, "file=/tmp/scratch.img,format=raw,if=none,id=scratch0")
 	assert.Contains(t, joined, "file=/tmp/virtio-win.iso,media=cdrom,if=none,id=viocd")
 
 	// Port forwards for post-install SSH + RDP.
@@ -44,11 +45,12 @@ func TestBuildSetupBootArgv(t *testing.T) {
 	assert.Contains(t, joined, "hostfwd=tcp:127.0.0.1:23389-:3389")
 }
 
-// TestBuildSetupBootArgv_QcowAnswer covers a .qcow2 answer volume taking the
-// qcow2 driver format instead of raw.
-func TestBuildSetupBootArgv_QcowAnswer(t *testing.T) {
+// TestBuildSetupBootArgv_ISOAnswer covers an ISO answer volume attached as a
+// CD-ROM alongside the FAT scratch volume.
+func TestBuildSetupBootArgv_ISOAnswer(t *testing.T) {
 	spec := testSpec()
-	argv := BuildSetupBootArgv(spec, "/tmp/boot.qcow2", "/tmp/win.iso", "/tmp/answer.qcow2")
+	argv := BuildSetupBootArgv(spec, "/tmp/boot.qcow2", "/tmp/win.iso", "/tmp/answer.iso", "/tmp/scratch.img")
 	joined := strings.Join(argv, " ")
-	assert.Contains(t, joined, "file=/tmp/answer.qcow2,format=qcow2,if=none,id=answer0")
+	assert.Contains(t, joined, "file=/tmp/answer.iso,media=cdrom,if=none,id=answercd")
+	assert.Contains(t, joined, "file=/tmp/scratch.img,format=raw,if=none,id=scratch0")
 }

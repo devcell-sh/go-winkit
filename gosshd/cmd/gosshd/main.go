@@ -7,8 +7,8 @@
 // because the guest has no environment to configure it through: pointing it
 // at the shared volume is what keeps the log readable after the VM is gone.
 //
-// The optional second positional is the virtio-serial structured port (e.g.
-// \\.\Global\winkit.structured.0). When present and openable, every SSH
+// The optional second positional is the serial port for structured output
+// (e.g. \\.\COM2). When present and openable, every SSH
 // session is emitted there as one JSON line — command, exit code, captured
 // stdout/stderr — landing in the host's build.jsonl for a durable 1:1
 // record. When absent or unopenable (a base image without the port wired),

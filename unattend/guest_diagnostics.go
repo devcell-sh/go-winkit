@@ -27,17 +27,17 @@ const (
 
 // GenerateGuestDiagnosticsScript returns the PowerShell run at first logon.
 //
-// It locates its own volume by looking for the answer file rather than
-// assuming a drive letter — Windows assigns those dynamically, and a wrong
+// It locates the scratch FAT volume by looking for the scratch marker rather
+// than assuming a drive letter: Windows assigns those dynamically, and a wrong
 // guess is exactly what made the NetKVM failure so hard to pin down.
 func GenerateGuestDiagnosticsScript() []byte {
-	return []byte(`# winkit guest diagnostics. Writes to the volume it was launched from,
+	return []byte(`# winkit guest diagnostics. Writes to the scratch FAT volume,
 # which the host reads back out of the raw FAT image.
 $ErrorActionPreference = 'Continue'
 
 $vol = $null
 foreach ($d in (Get-Volume | Where-Object { $_.DriveLetter })) {
-    if (Test-Path ("{0}:\autounattend.xml" -f $d.DriveLetter)) {
+    if (Test-Path ("{0}:\` + ScratchMarkerName + `" -f $d.DriveLetter)) {
         $vol = "{0}:" -f $d.DriveLetter
         break
     }
@@ -105,14 +105,14 @@ Stop-Transcript
 `)
 }
 
-// ReadGuestDiagnostics reads the report the guest wrote to the answer volume.
-// A missing log is an error rather than an empty string: it means the guest
-// never got as far as running the script, which is itself the finding.
-func ReadGuestDiagnostics(answerImagePath string) (string, error) {
-	data, err := isokit.ReadFileFromFAT(answerImagePath, "/"+GuestDiagnosticsLogName)
+// ReadGuestDiagnostics reads the report the guest wrote to the scratch FAT
+// volume. A missing log is an error rather than an empty string: it means the
+// guest never got as far as running the script, which is itself the finding.
+func ReadGuestDiagnostics(scratchImagePath string) (string, error) {
+	data, err := isokit.ReadFileFromFAT(scratchImagePath, "/"+GuestDiagnosticsLogName)
 	if err != nil {
-		return "", fmt.Errorf("no guest diagnostics in %s — the guest never ran %s: %w",
-			answerImagePath, GuestDiagnosticsScriptName, err)
+		return "", fmt.Errorf("no guest diagnostics in %s: the guest never ran %s: %w",
+			scratchImagePath, GuestDiagnosticsScriptName, err)
 	}
 	return string(data), nil
 }

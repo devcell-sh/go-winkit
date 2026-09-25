@@ -12,18 +12,17 @@ func TestValidate_NoHooksIsValid(t *testing.T) {
 	}
 }
 
-func TestValidate_PEAndWSLMutuallyExclusive(t *testing.T) {
+func TestValidate_PEAndWSLSelectsWSL1PE(t *testing.T) {
 	opts := BuildOpts{
 		From: "windows/11-pro-arm64",
 		PE:   true,
 		WSL:  &WSLConfig{Image: "alpine"},
 	}
-	err := opts.Validate()
-	if err == nil {
-		t.Fatal("expected error for PE + WSL")
+	if err := opts.Validate(); err != nil {
+		t.Fatalf("PE + WSL must select the WSL1 PE build: %v", err)
 	}
-	if want := "mutually exclusive"; !contains(err.Error(), want) {
-		t.Fatalf("error %q should contain %q", err, want)
+	if got := opts.Stage(); got != StagePE {
+		t.Fatalf("Stage() = %q, want %q", got, StagePE)
 	}
 }
 
@@ -199,6 +198,24 @@ func TestWSLNilMeansDisabled(t *testing.T) {
 	}
 	if err := opts.Validate(); err != nil {
 		t.Fatalf("nil WSL should be valid: %v", err)
+	}
+}
+
+func TestStage(t *testing.T) {
+	tests := []struct {
+		name string
+		opts BuildOpts
+		want Stage
+	}{
+		{"base by default", BuildOpts{}, StageBase},
+		{"pe", BuildOpts{PE: true}, StagePE},
+		{"pe wsl1", BuildOpts{PE: true, WSL: &WSLConfig{Image: "alpine"}}, StagePE},
+		{"wsl", BuildOpts{WSL: &WSLConfig{Image: "alpine"}}, StageWSL},
+	}
+	for _, tt := range tests {
+		if got := tt.opts.Stage(); got != tt.want {
+			t.Errorf("%s: Stage() = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }
 

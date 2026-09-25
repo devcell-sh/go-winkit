@@ -32,7 +32,7 @@ const (
 // buildBaseInstallImage performs a full unattended Windows install to dest,
 // running user hooks from opts over SSH after the OS boots. This is the
 // default (non-PE, non-WSL) build mode.
-func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, opts *buildopts.BuildOpts, logger *slog.Logger, noCache bool, accel, displayType string) error {
+func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, opts *buildopts.BuildOpts, logger *slog.Logger, noCache bool, accel, displayType, structuredLogPath string) error {
 	if accel == "" {
 		accel = qemu.DefaultAccel()
 	}
@@ -75,6 +75,16 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 		return fmt.Errorf("reading gosshd binary: %w", err)
 	}
 
+	logger.Info("cross-compiling winkit-service wrapper", "arch", "arm64")
+	serviceExe := filepath.Join(workDir, "winkit-service.exe")
+	if err := winpe.CrossCompileService(serviceExe, "arm64"); err != nil {
+		return fmt.Errorf("cross-compiling winkit-service: %w", err)
+	}
+	serviceData, err := os.ReadFile(serviceExe)
+	if err != nil {
+		return fmt.Errorf("reading winkit-service binary: %w", err)
+	}
+
 	// --- Build unattend config ---
 	cfg := unattend.DefaultConfig()
 	cfg.EnableRDP = true
@@ -82,10 +92,12 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 	cfg.OpenSSHPayload = filepath.Base(opensshZip)
 	cfg.OpenSSHPayloadData = opensshData
 	cfg.OpenSSHPayloadSize = len(opensshData)
-	cfg.VirtIODrivers = append(unattend.NetKVMDriverPaths(), unattend.VioserialDriverPaths()...)
+	cfg.VirtIODrivers = unattend.NetKVMDriverPaths()
 	cfg.GosshdBinaryName = "gosshd.exe"
 	cfg.GosshdBinaryData = gosshdData
 	cfg.GosshdListenAddr = fmt.Sprintf(":%d", baseGosshdPort)
+	cfg.ServiceBinaryName = "winkit-service.exe"
+	cfg.ServiceBinaryData = serviceData
 	cfg.KeepDisplayAwake = true
 	cfg.SMBIOSHostname = true
 
@@ -99,9 +111,10 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 
 	wslWinPEAgentConfig(&cfg, virtioISO, logger)
 
-	answerImg := filepath.Join(workDir, "autounattend.img")
+	answerISO := filepath.Join(workDir, "autounattend.iso")
+	scratchImg := filepath.Join(workDir, "winkit-scratch.img")
 	logger.Info("building answer volume", "user", cfg.Username, "rdp", cfg.EnableRDP)
-	if err := unattend.BuildAnswerVolume(cfg, answerImg); err != nil {
+	if err := unattend.BuildAnswerVolume(cfg, answerISO, scratchImg); err != nil {
 		return fmt.Errorf("building answer volume: %w", err)
 	}
 
@@ -136,18 +149,20 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 	}
 
 	// --- Boot VM ---
-	// Raw guest event stream (QEMU chardev); the edge appends it into the
-	// unified build.jsonl after the build.
-	guestJSONL := filepath.Join(workDir, "guest.jsonl")
+	guestJSONL := structuredLogPath
+	if guestJSONL == "" {
+		guestJSONL = filepath.Join(workDir, "guest.jsonl")
+	}
 	installOut := filepath.Join(workDir, "install")
 	secure := strings.HasPrefix(accel, "tcg")
 	logger.Info("starting Windows install VM",
 		"accel", accel, "secure", secure, "backend", backendName)
 
 	installCfg := vm.VMInstallConfig{
-		WindowsISO:      winISO,
-		VirtIOISO:       virtioISO,
-		AnswerVolume:    answerImg,
+		WindowsISO:    winISO,
+		VirtIOISO:     virtioISO,
+		AnswerISO:     answerISO,
+		ScratchVolume: scratchImg,
 		DiskPath:        dest,
 		CPUs:            baseCPUs,
 		MemoryGB:        baseMemoryGB,
@@ -176,7 +191,6 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 	defer machine.Stop()
 
 	stopTail := make(chan struct{})
-	go tailStream(filepath.Join(machine.OutputDir(), "guest-progress.log"), "progress", logger, stopTail)
 	go tailStream(filepath.Join(machine.OutputDir(), "serial.log"), "serial", logger, stopTail)
 	go tailStream(filepath.Join(machine.OutputDir(), "qemu.log"), "qemu", logger, stopTail)
 

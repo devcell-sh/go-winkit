@@ -17,7 +17,8 @@ import (
 type InstallConfig struct {
 	WindowsISO    string
 	VirtIOISO     string
-	AnswerVolume  string
+	AnswerISO     string
+	ScratchVolume string
 	DevcellWimImg string
 
 	DiskPath     string
@@ -54,9 +55,9 @@ type InstallConfig struct {
 	// RDPPort forwards host:RDPPort → guest:3389 for Remote Desktop. Zero
 	// disables it.
 	RDPPort uint16
-	// StructuredLogPath, when set, backs the winkit.structured.0 virtio-serial
-	// port with a build.jsonl file (the guest streams structured events there
-	// once vioserial is installed in specialize).
+	// StructuredLogPath, when set, backs the COM2 pci-serial port with a
+	// build.jsonl file (the guest streams structured events there using
+	// the inbox serial.sys driver).
 	StructuredLogPath string
 	// Secure boots the VM on the EL3/secure-world machine (secure=on, GICv3/ITS,
 	// neoverse-n1, -kernel firmware). Required for the Hyper-V hypervisor to
@@ -106,15 +107,15 @@ func (vm *InstallVM) Wait() error {
 	return vm.cmd.Wait()
 }
 
-// StartInstall boots a Windows installer via QEMU and returns a handle.
-// The caller is responsible for monitoring progress (SSH polling, stall
-// detection, screenshots) and calling Stop() when done.
 // RunConfig boots an already-installed disk (continue/finalize mode) via
 // BuildRunCommand, rather than driving Setup. The disk and its NVRAM vars store
 // must already exist — the vars carry the "Windows Boot Manager" UEFI entry, so
 // a fresh vars store would not boot the installed OS.
 type RunConfig struct {
-	DiskPath     string
+	DiskPath string
+	// BootVolume, when set, is a standalone WinPE FAT qcow2. DiskPath is
+	// attached as its writable NVMe data disk.
+	BootVolume   string
 	FirmwarePath string
 	VarsPath     string
 	OutputDir    string
@@ -143,8 +144,8 @@ type RunConfig struct {
 	// Detach runs QEMU in its own process group so it survives the parent's
 	// exit. The caller must track the PID and stop it via QMP or signals.
 	Detach bool
-	// StructuredLogPath, when set, backs the winkit.structured.0 virtio-serial
-	// port with a host-side file so gosshd guest events are captured.
+	// StructuredLogPath, when set, backs the COM2 pci-serial port with a
+	// host-side file so gosshd guest events are captured.
 	StructuredLogPath string
 }
 
@@ -231,7 +232,12 @@ func StartRun(ctx context.Context, cfg RunConfig) (*InstallVM, error) {
 	}
 	spec.ApplyDefaults()
 
-	argv := BuildRunCommand(spec)
+	var argv []string
+	if cfg.BootVolume != "" {
+		argv = BuildQcowBootArgv(spec, cfg.BootVolume)
+	} else {
+		argv = BuildRunCommand(spec)
+	}
 	qemuBin, err := QEMUBinaryPath()
 	if err != nil {
 		return nil, err
@@ -263,7 +269,7 @@ func StartRun(ctx context.Context, cfg RunConfig) (*InstallVM, error) {
 	fmt.Fprintf(logF, "accel:    %s\n", spec.effectiveAccel())
 	for _, f := range []struct{ label, path string }{
 		{"firmware", spec.FirmwarePath}, {"vars", spec.VarsPath},
-		{"disk", spec.DiskPath}, {"virtio", spec.VirtIOISO},
+		{"disk", spec.DiskPath}, {"boot", cfg.BootVolume}, {"virtio", spec.VirtIOISO},
 	} {
 		if f.path == "" {
 			continue
@@ -280,7 +286,8 @@ func StartRun(ctx context.Context, cfg RunConfig) (*InstallVM, error) {
 	// Fail early with a clear message if a required input file is absent, rather
 	// than letting QEMU abort with a terse open() error buried in its output.
 	for _, req := range []struct{ label, path string }{
-		{"firmware", spec.FirmwarePath}, {"vars", spec.VarsPath}, {"disk", spec.DiskPath},
+		{"firmware", spec.FirmwarePath}, {"vars", spec.VarsPath},
+		{"disk", spec.DiskPath}, {"boot volume", cfg.BootVolume},
 	} {
 		if req.path == "" {
 			continue
@@ -329,6 +336,9 @@ func lastLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
+// StartInstall boots a Windows installer via QEMU and returns a handle.
+// The caller is responsible for monitoring progress (SSH polling, stall
+// detection via Monitor, screenshots) and calling Stop() when done.
 func StartInstall(ctx context.Context, cfg InstallConfig) (*InstallVM, error) {
 	if cfg.WindowsISO == "" {
 		return nil, fmt.Errorf("WindowsISO is required")
@@ -376,7 +386,6 @@ func StartInstall(ctx context.Context, cfg InstallConfig) (*InstallVM, error) {
 	}
 
 	serialLog := filepath.Join(outDir, "serial.log")
-	progressLog := filepath.Join(outDir, "guest-progress.log")
 
 	cpus := cfg.CPUs
 	if cpus == 0 {
@@ -401,7 +410,6 @@ func StartInstall(ctx context.Context, cfg InstallConfig) (*InstallVM, error) {
 		QMPSocketDir:           outDir,
 		DisplayType:            displayType,
 		SerialLogPath:          serialLog,
-		GuestProgressLogPath:   progressLog,
 		GuestStructuredLogPath: cfg.StructuredLogPath,
 		VirtIOISO:              cfg.VirtIOISO,
 		DiskCacheMode:          cfg.DiskCacheMode,
@@ -430,9 +438,9 @@ func StartInstall(ctx context.Context, cfg InstallConfig) (*InstallVM, error) {
 	var argv []string
 	if cfg.BootVolume != "" {
 		// FAT-boot the retail Setup boot chain; the ISO is only a file source.
-		argv = BuildSetupBootArgv(spec, cfg.BootVolume, cfg.WindowsISO, cfg.AnswerVolume)
+		argv = BuildSetupBootArgv(spec, cfg.BootVolume, cfg.WindowsISO, cfg.AnswerISO, cfg.ScratchVolume)
 	} else {
-		argv = BuildInstallCommand(spec, cfg.WindowsISO, cfg.AnswerVolume, cfg.DevcellWimImg)
+		argv = BuildInstallCommand(spec, cfg.WindowsISO, cfg.AnswerISO, cfg.ScratchVolume, cfg.DevcellWimImg)
 	}
 
 	qemuBin, err := QEMUBinaryPath()

@@ -22,7 +22,11 @@ func (c *Config) ToBuildOpts() (*buildopts.BuildOpts, error) {
 	}
 
 	if c.WSL != nil {
-		opts.WSL = &buildopts.WSLConfig{Image: c.WSL.Image, ServicesDir: c.WSL.Services}
+		opts.WSL = &buildopts.WSLConfig{
+			Image:       c.WSL.Image,
+			NixHome:     c.WSL.NixHome,
+			ServicesDir: c.WSL.Services,
+		}
 	}
 
 	if c.Ports != nil {

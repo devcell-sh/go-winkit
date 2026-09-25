@@ -140,6 +140,23 @@ func TestGenerateWimBuilderScript_DiskpartWorkVolume(t *testing.T) {
 	assert.Contains(t, script, "diskpart failed")
 }
 
+func TestWSL1FeaturePrepOps(t *testing.T) {
+	ops := WSL1FeaturePrepOps()
+	require.Len(t, ops, 1)
+	assert.Equal(t, "Microsoft-Windows-Subsystem-Linux", ops[0].Feature)
+}
+
+func TestGenerateWimBuilderScript_WSL1Feature(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops: WSL1FeaturePrepOps(),
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	assert.Contains(t, script, "/Enable-Feature /FeatureName:Microsoft-Windows-Subsystem-Linux")
+	assert.Contains(t, script, "/Source:W:\\mnt\\install")
+	assert.NotContains(t, script, "/Online")
+}
+
 func TestOpenSSHPrepOps(t *testing.T) {
 	ops := OpenSSHPrepOps()
 	require.Len(t, ops, 2)

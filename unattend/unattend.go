@@ -215,6 +215,19 @@ type Config struct {
 	// poll and writes the combined output to winkit-out.txt — a one-shot
 	// diagnostic channel into WinPE, which has no network and no QGA.
 	AgentCommand string
+	// StructPort is the guest device path of the COM2 serial port
+	// (e.g. \\.\COM2). When set, the bootstrap emits JSONL events
+	// through it so the host can parse them with ParseGuestEvents.
+	// Populated by GenerateBootstrapScript.
+	StructPort string
+	// ServiceBinaryName is the filename of the winkit-service wrapper
+	// shipped on the answer volume (e.g. "winkit-service.exe"). When set,
+	// the bootstrap uses it to register the s6 supervisor as a Windows
+	// service with --log-serial, piping s6-svscan stdout to the
+	// serial port.
+	ServiceBinaryName string
+	// ServiceBinaryData is the winkit-service binary's bytes.
+	ServiceBinaryData []byte
 }
 
 // winPEFixedSyncCommands is how many RunSynchronousCommand entries the
@@ -328,11 +341,10 @@ func NetKVMDriverPaths() []VirtIODriver {
 // VioserialDriverPaths returns the virtio-win vioserial driver for Windows
 // ARM64.
 //
-// The vioserial driver makes the virtio-serial port visible to Windows as
-// \\.\Global\winkit.progress.0. Without it the bootstrap's Send-Progress
-// writes to nothing: PL011 UART does not register as a COMx port on ARM64,
-// and virtio-serial needs this driver. Staged in specialize so PnP installs
-// it on the OOBE boot, giving progress logging through OOBE and first logon.
+// Deprecated: serial communication now uses PCI COM2 (inbox serial.sys).
+// This function is retained only for callers that still need the vioserial
+// driver for non-serial purposes. Staged in specialize so PnP installs
+// it on the OOBE boot.
 func VioserialDriverPaths() []VirtIODriver {
 	return []VirtIODriver{{
 		INFRelPath:  `vioserial\w11\ARM64\vioser.inf`,
@@ -388,18 +400,22 @@ const DefaultGosshdListenAddr = ":2222"
 func (c Config) SpecializeGosshdCopyOrder() int { return c.specializePostDriverBase() + 1 }
 func (c Config) SpecializeGosshdTaskOrder() int { return c.specializePostDriverBase() + 2 }
 
+// SpecializeServiceCopyOrder is the <Order> for the specialize command that
+// copies winkit-service.exe from the answer volume to C:\.
+func (c Config) SpecializeServiceCopyOrder() int { return c.specializePostDriverBase() + 3 }
+
 // SpecializeSMBIOSHostnameOrder is the <Order> for the specialize command
 // that registers the boot-time hostname-from-SMBIOS scheduled task.
-func (c Config) SpecializeSMBIOSHostnameOrder() int { return c.specializePostDriverBase() + 3 }
+func (c Config) SpecializeSMBIOSHostnameOrder() int { return c.specializePostDriverBase() + 4 }
 
 // SpecializeKeepDisplayAwakeOrder is the <Order> for the specialize powercfg
 // that keeps the console visible through the whole install (see KeepDisplayAwake).
-func (c Config) SpecializeKeepDisplayAwakeOrder() int { return c.specializePostDriverBase() + 4 }
+func (c Config) SpecializeKeepDisplayAwakeOrder() int { return c.specializePostDriverBase() + 5 }
 
 // specializeQuietServicesBase is the first <Order> used by the quiet-services
 // block. Each service disable is a separate RunSynchronousCommand to stay under
 // the 259-char Path limit enforced by Windows Setup.
-func (c Config) specializeQuietServicesBase() int { return c.specializePostDriverBase() + 5 }
+func (c Config) specializeQuietServicesBase() int { return c.specializePostDriverBase() + 6 }
 
 // CustomStep is a caller-supplied PowerShell step appended to the
 // first-logon bootstrap.
@@ -609,11 +625,17 @@ var autounattendFuncs = template.FuncMap{
 	"inc":      func(i int) int { return i + 1 },
 	"add":      func(a, b int) int { return a + b },
 	"addOrder": func(i, base int) int { return i + base },
-	// agentLauncher emits winpe.AgentLauncherCommand with XML escaping; the
-	// command is Go-generated so the template and the shipped script cannot
-	// drift apart.
-	"agentLauncher": func() string {
-		return strings.ReplaceAll(winpe.AgentLauncherCommand(), "&", "&amp;")
+	// agentLauncher emits the WinPE agent launcher command with XML escaping.
+	// When a service binary name is provided, uses the native pe-agent;
+	// otherwise falls back to the PS1 agent launcher.
+	"agentLauncher": func(serviceBinaryName string) string {
+		var cmd string
+		if serviceBinaryName != "" {
+			cmd = winpe.PEAgentLauncherCommand(serviceBinaryName)
+		} else {
+			cmd = winpe.AgentLauncherCommand()
+		}
+		return strings.ReplaceAll(cmd, "&", "&amp;")
 	},
 }
 
@@ -695,7 +717,7 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
              can never abort Setup the way an unresolved DriverPaths did. -->
         <RunSynchronousCommand wcm:action="add">
           <Order>{{.AgentLauncherOrder}}</Order>
-          <Path>{{agentLauncher}}</Path>
+          <Path>{{agentLauncher .ServiceBinaryName}}</Path>
           <Description>Start the winkit WinPE agent from the answer volume</Description>
         </RunSynchronousCommand>
 {{- end}}
@@ -851,8 +873,15 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>{{.SpecializeGosshdTaskOrder}}</Order>
-          <Path>cmd /c schtasks /create /tn gosshd /sc onstart /ru SYSTEM /rl HIGHEST /tr "C:\{{.GosshdBinaryName}} -addr {{.GosshdListenAddrOrDefault}}{{.GosshdVsockFlags}} -shell powershell C:\gosshd.log \\.\Global\winkit.structured.0" /f</Path>
+          <Path>cmd /c schtasks /create /tn gosshd /sc onstart /ru SYSTEM /rl HIGHEST /tr "C:\{{.GosshdBinaryName}} -addr {{.GosshdListenAddrOrDefault}}{{.GosshdVsockFlags}} -shell powershell C:\gosshd.log \\.\COM2" /f</Path>
           <Description>Run gosshd provisioning server at every boot as SYSTEM</Description>
+        </RunSynchronousCommand>
+{{- end}}
+{{- if .ServiceBinaryName}}
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{.SpecializeServiceCopyOrder}}</Order>
+          <Path>cmd /c "for %d in (C D E F G H I J K L) do @if exist %d:\{{.ServiceBinaryName}} copy /y %d:\{{.ServiceBinaryName}} C:\{{.ServiceBinaryName}} >nul"</Path>
+          <Description>Copy winkit-service wrapper to C:\</Description>
         </RunSynchronousCommand>
 {{- end}}
 {{- if .SMBIOSHostname}}
@@ -1081,68 +1110,88 @@ func writeAnswerImage(xmlBytes []byte, extra, exact map[string][]byte, destPath 
 }
 
 // BuildAnswerVolume renders the answer file and the first-logon bootstrap
-// from one config and writes the complete answer volume. This is the entry
-// point for building a real install volume — the XML's FirstLogonCommands
-// launcher expects the bootstrap script to ship next to it, and taking the
-// config here makes it impossible to build a volume where they disagree.
-func BuildAnswerVolume(cfg Config, destPath string) error {
-	extra := map[string][]byte{
-		"/" + BootstrapScriptName: GenerateBootstrapScript(cfg),
+// from one config and writes a Joliet ISO (all read-only payloads) plus a
+// tiny FAT scratch volume (guest-writable files only). This eliminates the
+// go-diskfs FAT directory-entry size bug for all read-only content: ISO 9660
+// uses extent-based sizing with no cluster rounding.
+func BuildAnswerVolume(cfg Config, isoPath, scratchPath string) error {
+	xmlBytes := GenerateXML(cfg)
+	if errs := Validate(xmlBytes); len(errs) > 0 {
+		msgs := make([]string, len(errs))
+		for i, err := range errs {
+			msgs[i] = err.Error()
+		}
+		return fmt.Errorf("invalid answer file:\n  %s", strings.Join(msgs, "\n  "))
+	}
+
+	isoFiles := map[string][]byte{
+		"/autounattend.xml":              xmlBytes,
+		"/startup.nsh":                   []byte(winpe.StartupNSH),
+		"/" + GuestDiagnosticsScriptName: GenerateGuestDiagnosticsScript(),
+		"/" + BootstrapScriptName:        GenerateBootstrapScript(cfg),
 	}
 	if cfg.OpenSSHPayload != "" && len(cfg.OpenSSHPayloadData) > 0 {
-		// Windows servicing cannot install OpenSSH Server from our media, so
-		// the standalone release travels with the answer file.
-		extra["/"+cfg.OpenSSHPayload] = cfg.OpenSSHPayloadData
+		isoFiles["/"+cfg.OpenSSHPayload] = cfg.OpenSSHPayloadData
 	}
 	if cfg.WallpaperName != "" && len(cfg.WallpaperData) > 0 {
-		extra["/"+cfg.WallpaperName] = cfg.WallpaperData
-	}
-	if cfg.WinPEAgent {
-		// Both virtio-serial ports wired: progress for the human-readable
-		// stream, structured for the Panther-log JSON tee into build.jsonl.
-		// Harmless when the ports are absent (no vioserial driver): the
-		// agent opens them lazily and keeps working without them.
-		extra["/"+winpe.AgentScriptName] = winpe.GenerateAgent(winpe.PayloadConfig{
-			ProgressPort:   `\\.\Global\` + winpe.ProgressPortName,
-			StructuredPort: `\\.\Global\` + winpe.StructuredPortName,
-		})
-		extra["/"+winpe.AgentVolumeMarker] = []byte("winkit agent volume\r\n")
-		extra["/"+winpe.DiagScriptName] = winpe.GenerateDiagScript()
-		if cfg.AgentCommand != "" {
-			// set /p reads the first line only, so padding after the
-			// newline is harmless.
-			extra["/"+winpe.AgentCommandFile] = []byte(cfg.AgentCommand + "\r\n")
-		}
+		isoFiles["/"+cfg.WallpaperName] = cfg.WallpaperData
 	}
 	if len(cfg.EFIBootLoader) > 0 {
-		extra["/EFI/BOOT/BOOTAA64.EFI"] = cfg.EFIBootLoader
+		isoFiles["/EFI/BOOT/BOOTAA64.EFI"] = cfg.EFIBootLoader
 	}
-	for path, data := range cfg.PwshFiles {
-		extra[path] = data
+	for p, data := range cfg.PwshFiles {
+		isoFiles[p] = data
 	}
-	// Answer-volume drivers are only consumed by WinPE's drvload, which
-	// does not verify Authenticode. Cluster-padding is safe here; the
-	// installed-OS copy comes from the virtio-win CD via pnputil.
-	for path, data := range cfg.AnswerDrivers {
-		extra[path] = data
+	for p, data := range cfg.AnswerDrivers {
+		isoFiles[p] = data
 	}
-	// Byte-exact (unpadded) files: gosshd launches byte-for-byte as built,
-	// the rclone zip is read from its end, and the WinFsp MSI is signature-
-	// checked — FAT cluster padding corrupts all three.
-	exact := map[string][]byte{}
 	if cfg.GosshdBinaryName != "" && len(cfg.GosshdBinaryData) > 0 {
-		exact["/"+cfg.GosshdBinaryName] = cfg.GosshdBinaryData
+		isoFiles["/"+cfg.GosshdBinaryName] = cfg.GosshdBinaryData
+	}
+	if cfg.ServiceBinaryName != "" && len(cfg.ServiceBinaryData) > 0 {
+		isoFiles["/"+cfg.ServiceBinaryName] = cfg.ServiceBinaryData
 	}
 	if cfg.RclonePayload != "" && len(cfg.RclonePayloadData) > 0 {
-		exact["/"+cfg.RclonePayload] = cfg.RclonePayloadData
+		isoFiles["/"+cfg.RclonePayload] = cfg.RclonePayloadData
 	}
 	if cfg.WinFspPayload != "" && len(cfg.WinFspPayloadData) > 0 {
-		exact["/"+cfg.WinFspPayload] = cfg.WinFspPayloadData
+		isoFiles["/"+cfg.WinFspPayload] = cfg.WinFspPayloadData
 	}
-	if len(cfg.WSLPayloadData) > 0 {
-		exact["/"+wsl.VolumeName] = cfg.WSLPayloadData
+	// WSL tarball goes on the scratch FAT, not the ISO: the WSL service's
+	// RegisterDistro cannot read from a CD-ROM filesystem (0xd000000d).
+	wslOnScratch := len(cfg.WSLPayloadData) > 0
+
+	// Scratch FAT: only files the guest needs to write to, plus markers
+	// for volume discovery.
+	scratchFiles := map[string][]byte{
+		"/" + ScratchMarkerName: []byte("winkit scratch volume\r\n"),
 	}
-	return writeAnswerImage(GenerateXML(cfg), extra, exact, destPath)
+	if wslOnScratch {
+		scratchFiles["/"+wsl.VolumeName] = cfg.WSLPayloadData
+	}
+	if cfg.WinPEAgent {
+		scratchFiles["/"+winpe.AgentVolumeMarker] = []byte("winkit agent volume\r\n")
+		if cfg.ServiceBinaryName != "" {
+			scratchFiles["/"+winpe.AgentLauncherScript] = winpe.GeneratePEAgentLauncherScript(cfg.ServiceBinaryName)
+		} else {
+			scratchFiles["/"+winpe.AgentScriptName] = winpe.GenerateAgent(winpe.PayloadConfig{
+				SerialPort: winpe.GuestSerialPort,
+			})
+			scratchFiles["/"+winpe.AgentLauncherScript] = winpe.GenerateAgentLauncherScript()
+			scratchFiles["/"+winpe.DiagScriptName] = winpe.GenerateDiagScript()
+		}
+		if cfg.AgentCommand != "" {
+			scratchFiles["/"+winpe.AgentCommandFile] = []byte(cfg.AgentCommand + "\r\n")
+		}
+	}
+
+	if err := isokit.CreateJolietISO(isoPath, isoFiles); err != nil {
+		return fmt.Errorf("creating answer ISO: %w", err)
+	}
+	if err := isokit.CreateFATImageSized(scratchPath, scratchFiles, 0); err != nil {
+		return fmt.Errorf("creating scratch volume: %w", err)
+	}
+	return nil
 }
 
 // WriteISO creates a small ISO image containing autounattend.xml.

@@ -31,6 +31,8 @@ const (
 var GuestLogNames = []string{
 	SetupActSnapshotName,
 	SetupErrSnapshotName,
+	SetupActTargetSnapshotName,
+	SetupErrTargetSnapshotName,
 	AgentResultFile,
 	BootstrapLogName,
 	GuestDiagnosticsLogName,

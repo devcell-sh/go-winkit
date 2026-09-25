@@ -65,14 +65,14 @@ func TestPayloadFiles_CompleteBootChain(t *testing.T) {
 
 func TestBuildConfig_PayloadConfig(t *testing.T) {
 	cfg := BuildConfig{
-		ProgressPort: `\\.\Global\test.port`,
+		SerialPort: GuestSerialPort,
 	}
 	drivers := map[string][]byte{
-		"drivers/vioserial/vioser.inf": []byte("inf"),
+		"drivers/vioscsi/vioscsi.inf": []byte("inf"),
 	}
-	pc := cfg.payloadConfig(drivers, nil)
-	assert.Equal(t, `\\.\Global\test.port`, pc.ProgressPort)
+	pc := cfg.payloadConfig(drivers)
+	assert.Equal(t, GuestSerialPort, pc.SerialPort)
 	assert.True(t, pc.WPEInit)
 	assert.True(t, pc.SyncAgent)
-	assert.Contains(t, pc.DriverINFs, `X:\winkit\drivers\vioserial\vioser.inf`)
+	assert.Contains(t, pc.DriverINFs, `X:\winkit\drivers\vioscsi\vioscsi.inf`)
 }

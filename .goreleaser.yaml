@@ -23,8 +23,6 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=1
-    flags:
-      - -tags=wimlib
     ldflags:
       - -s -w
         -X 'github.com/devcell-sh/go-winkit/internal/cli.version={{.Version}}'

@@ -143,18 +143,19 @@ func newUnattendValidateCmd() *cobra.Command {
 func newUnattendVolumeCmd() *cobra.Command {
 	var flags unattendFlags
 	cmd := &cobra.Command{
-		Use:   "volume <out.img>",
-		Short: "Build the FAT answer volume (autounattend.xml + provisioning payload)",
-		Args:  cobra.ExactArgs(1),
+		Use:   "volume <out.iso> <out-scratch.img>",
+		Short: "Build the answer ISO and scratch FAT volume",
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := flags.config()
 			if err != nil {
 				return err
 			}
-			if err := unattend.BuildAnswerVolume(cfg, args[0]); err != nil {
+			if err := unattend.BuildAnswerVolume(cfg, args[0], args[1]); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), args[0])
+			fmt.Fprintln(cmd.OutOrStdout(), args[1])
 			return nil
 		},
 	}

@@ -12,13 +12,13 @@ import (
 const (
 	GosshdShellCmdName = "gosshd.cmd"
 	GosshdLogName      = "gosshd.log"
+	ServiceVolumeName  = "winkit-service.exe"
 
-	// GosshdStructuredPort is the guest path of the virtio-serial structured
-	// port gosshd emits per-session records to. It mirrors the device name
-	// wired by the qemu package (winkit.structured.0, backed by build.jsonl);
-	// gosshd tolerates its absence, so passing it unconditionally is safe even
-	// on a boot where the port was not wired.
-	GosshdStructuredPort = `\\.\Global\winkit.structured.0`
+	// GosshdStructuredPort is the guest path of the serial port gosshd
+	// emits per-session records to (COM2, backed by build.jsonl on the
+	// host). Gosshd tolerates its absence, so passing it unconditionally
+	// is safe even on a boot where the port was not wired.
+	GosshdStructuredPort = GuestSerialPort
 )
 
 // BaseImageConfig describes a standalone bootable WinPE "base" image:
@@ -30,12 +30,24 @@ type BaseImageConfig struct {
 	VirtIOISO string
 	// GosshdExe is a windows cross-compiled gosshd (CrossCompileGosshd).
 	GosshdExe string
+	// ServiceExe is a cross-compiled winkit-service binary
+	// (CrossCompileService). When set, the pe-agent mode is started
+	// detached before gosshd so Panther logs stream to build.jsonl.
+	ServiceExe string
+	// GosshdAddr overrides the listen address gosshd binds to inside the
+	// guest (e.g. ":2222"). Empty means the gosshd default (":22").
+	GosshdAddr string
 	// PwshFiles are the extracted PowerShell 7 files (from ExtractPwshFiles).
 	// When set, they are injected into boot.wim so pwsh.exe is available at
 	// X:\winkit\pwsh\pwsh.exe inside WinPE.
 	PwshFiles map[string][]byte
 	// WorkDir holds the stage and inject trees; a temp dir when empty.
 	WorkDir string
+	// StartupCommand, when non-empty, is launched after WinPE/network/driver
+	// initialization immediately before gosshd starts. It runs concurrently so
+	// gosshd remains the foreground lifetime process and callers can inspect
+	// bootstrap progress and failures over SSH.
+	StartupCommand string
 }
 
 // BuildBaseImageFiles produces the FAT-volume file map for a self-contained
@@ -67,7 +79,6 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 	drivers := make(map[string][]byte)
 	for _, load := range []func(string) (map[string][]byte, error){
 		LoadWinPEStorageDrivers,
-		LoadWinPEVioserialDrivers,
 		LoadWinPENetKVMDrivers,
 	} {
 		m, err := load(cfg.VirtIOISO)
@@ -105,10 +116,22 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 		}
 	}
 
+	var serviceData []byte
+	if cfg.ServiceExe != "" {
+		var serr error
+		serviceData, serr = os.ReadFile(cfg.ServiceExe)
+		if serr != nil {
+			return nil, fmt.Errorf("reading winkit-service payload: %w", serr)
+		}
+	}
+
 	payload := map[string][]byte{
 		"winpeshl.ini":     []byte("[LaunchApps]\r\n" + `X:\winkit\` + GosshdShellCmdName + "\r\n"),
-		GosshdShellCmdName: GenerateGosshdShellCmd(infs),
+		GosshdShellCmdName: generateGosshdShellCmd(infs, cfg.ServiceExe != "", cfg.GosshdAddr, cfg.StartupCommand),
 		GosshdVolumeName:   gosshd,
+	}
+	if serviceData != nil {
+		payload[ServiceVolumeName] = serviceData
 	}
 	for name, data := range payload {
 		if err := os.WriteFile(filepath.Join(injectDir, name), data, 0o644); err != nil {
@@ -142,22 +165,37 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 // initialise WinPE, load the injected virtio drivers, open the firewall,
 // and run gosshd in the foreground — standalone WinPE reboots the moment
 // winpeshl's apps return, so the server blocking is what keeps the guest up.
-func GenerateGosshdShellCmd(driverINFs []string) []byte {
+func GenerateGosshdShellCmd(driverINFs []string, peAgent bool, gosshdAddr ...string) []byte {
+	addr := ""
+	if len(gosshdAddr) > 0 {
+		addr = gosshdAddr[0]
+	}
+	return generateGosshdShellCmd(driverINFs, peAgent, addr, "")
+}
+
+func generateGosshdShellCmd(driverINFs []string, peAgent bool, gosshdAddr, startupCommand string) []byte {
 	var b strings.Builder
 	b.WriteString("@echo off\r\n")
 	b.WriteString("wpeinit\r\n")
 	for _, inf := range driverINFs {
 		b.WriteString("drvload " + inf + "\r\n")
 	}
-	b.WriteString("if exist X:\\winkit\\pwsh\\pwsh.exe set PATH=X:\\winkit\\pwsh;%PATH%\r\n")
-	// Start the Event Log service so in-guest diagnostics in the System
-	// log are queryable via wevtutil. WinPE ships the service
-	// (Start=auto) but never actually starts it. pwsh is the one shell we can
-	// rely on here (net.exe/sc.exe are not always present).
+	b.WriteString("if exist X:\\winkit\\pwsh\\pwsh.exe set PATH=X:\\winkit;X:\\winkit\\pwsh;%PATH%\r\n")
 	b.WriteString("if exist X:\\winkit\\pwsh\\pwsh.exe X:\\winkit\\pwsh\\pwsh.exe " +
 		"-NoProfile -Command \"Start-Service EventLog -ErrorAction SilentlyContinue\"\r\n")
+	if peAgent {
+		b.WriteString("start /min X:\\winkit\\" + ServiceVolumeName +
+			" run --name pe-agent --log-serial " + GuestSerialPort + "\r\n")
+	}
 	b.WriteString("wpeutil DisableFirewall\r\n")
-	b.WriteString(`X:\winkit\` + GosshdVolumeName + ` X:\winkit\` + GosshdLogName +
+	if startupCommand != "" {
+		b.WriteString(`start "" /min cmd.exe /d /c ` + startupCommand + "\r\n")
+	}
+	addrArg := ""
+	if gosshdAddr != "" {
+		addrArg = "-addr " + gosshdAddr + " "
+	}
+	b.WriteString(`X:\winkit\` + GosshdVolumeName + " " + addrArg + `X:\winkit\` + GosshdLogName +
 		" " + GosshdStructuredPort + "\r\n")
 	return []byte(b.String())
 }

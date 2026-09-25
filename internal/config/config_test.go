@@ -162,15 +162,14 @@ features:
 	}
 }
 
-func TestValidate_PEAndWSLError(t *testing.T) {
+func TestValidate_PEAndWSLIsSupported(t *testing.T) {
 	cfg := &Config{
 		From: "windows/11-pro-arm64",
 		PE:   true,
 		WSL:  &WSLConfig{Image: "alpine"},
 	}
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for PE + WSL")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("PE + WSL must select the WSL1 PE path: %v", err)
 	}
 }
 

@@ -12,7 +12,7 @@ func TestNoSlirpSMBInArgv(t *testing.T) {
 	spec := Spec{VMName: "t", DiskPath: "/tmp/d.qcow2", SSHPort: 2222}
 	for name, argv := range map[string][]string{
 		"run":   BuildRunCommand(spec),
-		"setup": BuildSetupBootArgv(spec, "/tmp/boot.img", "/tmp/win.iso", "/tmp/ans.img"),
+		"setup": BuildSetupBootArgv(spec, "/tmp/boot.img", "/tmp/win.iso", "/tmp/ans.iso", "/tmp/scratch.img"),
 	} {
 		joined := strings.Join(argv, " ")
 		if strings.Contains(joined, "smb=") {

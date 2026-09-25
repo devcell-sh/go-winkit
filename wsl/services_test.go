@@ -197,6 +197,23 @@ func TestRcloneMountServiceValidatesInputs(t *testing.T) {
 	}
 }
 
+func TestS6HealthcheckService(t *testing.T) {
+	svc := S6HealthcheckService()
+	if svc.Name != "s6-healthcheck" {
+		t.Errorf("name = %q, want s6-healthcheck", svc.Name)
+	}
+	for _, want := range []string{
+		"s6-svstat",
+		"s6_health",
+		"w_mounted",
+		"/mnt/w",
+	} {
+		if !strings.Contains(svc.Run, want) {
+			t.Errorf("run missing %q", want)
+		}
+	}
+}
+
 func TestDirShareService(t *testing.T) {
 	svc, err := DirShareService([]sftpshare.DirShare{
 		{Drive: "X", VMPath: "/work/src"},

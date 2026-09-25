@@ -38,7 +38,7 @@ import (
 //     host slog events, guest structured events (merged from
 //     work/guest.jsonl after the build), and live-tailed progress + serial
 //     console lines
-//   - work/install/serial.log, work/install/guest-progress.log
+//   - work/install/serial.log
 //   - screenshots/*.png — periodic QMP screendumps (converted from PPM)
 //   - wsl.qcow2          — the produced disk
 //

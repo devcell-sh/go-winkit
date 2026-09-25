@@ -10,6 +10,24 @@ winkit is the Windows layer behind [devcell](https://github.com/DimmKirr/devcell
 go get github.com/devcell-sh/go-winkit
 ```
 
+## Getting started
+
+The `examples/` directory tours every consumer surface, and the
+example configs are load-tested in CI so they never drift from the
+schema:
+
+- [`examples/full-wsl1-alpine`](examples/full-wsl1-alpine) — YAML/CLI consumer: any
+  WSL rootfs image + your s6 services + post-deployment commands.
+- [`examples/library-consumer`](examples/library-consumer) — Go API
+  consumer: `winkit.Build` with programmatic hooks, then
+  `winkit.Start`. This is how devcell embeds winkit.
+- [`examples/pe-minimal`](examples/pe-minimal) — the WinPE path: a
+  bootable ~4GB volume in minutes, no full install.
+
+The contract between winkit and its consumers — what winkit owns and
+what it will never own — is written down in
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Testing
 
 Tests come in tiers by what they need. Only the first runs anywhere:

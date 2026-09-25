@@ -14,10 +14,10 @@ var (
 	createFile = kernel32.NewProc("CreateFileW")
 )
 
-// openVirtioPort opens a virtio-serial device path for writing.
-// Regular os.OpenFile rejects device paths (\\.\Global\...);
+// openSerialPort opens a serial device path for writing.
+// Regular os.OpenFile rejects device paths (\\.\...);
 // CreateFileW is required.
-func openVirtioPort(path string) io.WriteCloser {
+func openSerialPort(path string) io.WriteCloser {
 	pathPtr, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return nil

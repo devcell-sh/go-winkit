@@ -1,0 +1,162 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly example-e2e run (Monday 05:00 UTC): exercises the real
+    # build path against freshly cached media.
+    - cron: "0 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit
+    # Skip on schedule: the weekly trigger exists for the example jobs.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      # Compiles everything including examples/library-consumer — the
+      # public-API regression net.
+      - name: Build
+        run: go build ./...
+
+      - name: Unit tests
+        run: go test $(go list ./... | grep -v '/test/e2e')
+
+  # Real-media jobs below: weekly and on demand, not per-PR. They run
+  # on arm64 so the ARM64 Windows guest boots natively-architected TCG
+  # (GitHub-hosted runners have no aarch64 KVM).
+
+  seed-media:
+    name: Seed media cache
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Restore media cache
+        id: media-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/winkit
+          key: winkit-media-v1
+
+      - name: Install wimlib
+        if: steps.media-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwim-dev
+
+      - name: Fetch Windows + virtio ISOs
+        if: steps.media-cache.outputs.cache-hit != 'true'
+        run: |
+          go run ./cmd/winkit fetch
+          go run ./cmd/winkit fetch virtio
+
+  example-pe-minimal:
+    name: Example e2e — pe-minimal (build + WinPE boot)
+    needs: seed-media
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # libwim-dev: WIM injection (CGO). qemu-system-arm + qemu-utils:
+      # boot the volume and master the FAT qcow2. libarchive-tools /
+      # p7zip: ISO extraction fallbacks for UDF-layout installer media.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwim-dev qemu-system-arm qemu-utils libarchive-tools p7zip-full
+
+      - name: Restore media cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/winkit
+          key: winkit-media-v1
+          fail-on-cache-miss: true
+
+      - name: Build and boot pe-minimal example
+        env:
+          WINKIT_E2E: "1"
+        run: go test -run TestExamplePEMinimal_Build -v -timeout 80m ./test/e2e/
+
+      - name: Upload results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pe-minimal-results
+          path: test/results/
+          if-no-files-found: ignore
+
+  example-wsl-alpine:
+    name: Example e2e — wsl-alpine (full install + guest verify)
+    needs: seed-media
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+    # TCG full install is the long pole; the GitHub job ceiling is 6h.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwim-dev qemu-system-arm qemu-utils libarchive-tools p7zip-full
+
+      - name: Restore media cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/winkit
+          key: winkit-media-v1
+          fail-on-cache-miss: true
+
+      - name: Build, install, and verify wsl-alpine example
+        env:
+          WINKIT_E2E: "1"
+        run: go test -run TestExampleFullWSL1Alpine_E2E -v -timeout 340m ./test/e2e/
+
+      - name: Upload results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wsl-alpine-results
+          # The disk image is tens of GB — keep the forensics, drop the disk.
+          path: |
+            test/results/
+            !test/results/**/*.qcow2
+          if-no-files-found: ignore

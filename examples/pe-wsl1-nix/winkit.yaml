@@ -1,0 +1,12 @@
+# WinPE + WSL1 with a Nix/home-manager rootfs. The build creates a
+# Docker-based nix distro tarball, then assembles it into a PE boot
+# volume with the standard WSL1 runtime transplant.
+#
+# Build:  winkit build      (needs docker for the nix rootfs)
+# Boot:   winkit start      (SSH: ssh -p 20022 admin@127.0.0.1)
+# Verify: nix --version     (inside the WSL1 distro)
+
+from: windows/11-pro-arm64
+pe: true
+wsl:
+  image: nix

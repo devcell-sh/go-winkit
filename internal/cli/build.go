@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/devcell-sh/go-wimlib"
+	winkit "github.com/devcell-sh/go-winkit"
 	"github.com/devcell-sh/go-winkit/build"
 	"github.com/devcell-sh/go-winkit/build/buildopts"
 	"github.com/devcell-sh/go-winkit/build/imageformat"
@@ -21,12 +22,7 @@ import (
 	"github.com/devcell-sh/go-winkit/media/virtio"
 	"github.com/devcell-sh/go-winkit/s6"
 	"github.com/devcell-sh/go-winkit/vm/qemu"
-	"github.com/devcell-sh/go-winkit/winpe"
 )
-
-// qcow2 capacity for the base image: the boot payload is ~700MB and the
-// guest writes logs back to the volume.
-const baseImageCapacity = 4 * 1024 * 1024 * 1024
 
 // buildAccels lists accelerators valid for the build VM.
 var buildAccels = []string{"hvf", "kvm", "tcg"}
@@ -54,13 +50,7 @@ func validAccel(accel string, allowed []string) bool {
 // resolveStage maps BuildOpts to the internal stage name used by the build
 // pipeline. This bridges the new config model to the existing pipeline.
 func resolveStage(opts *buildopts.BuildOpts) string {
-	if opts.PE {
-		return "core"
-	}
-	if opts.WSL != nil {
-		return "wsl"
-	}
-	return "base"
+	return string(opts.Stage())
 }
 
 func newBuildCmd() *cobra.Command {
@@ -86,7 +76,7 @@ func newBuildCmd() *cobra.Command {
 			"Build modes:\n" +
 			"  (default) — full disk install (~64GB qcow2, persistent OS)\n" +
 			"  --pe      — WinPE boot volume (~4GB, ephemeral)\n" +
-			"  --wsl     — full disk install + WSL distro imported\n\n" +
+			"  --wsl     — WSL1 distro (full install, or PE bundle with --pe)\n\n" +
 			"dest may be a directory (default ./) or a .qcow2 path. Requires a\n" +
 			"wimlib-enabled build (-tags wimlib).",
 		Args: cobra.MaximumNArgs(1),
@@ -160,6 +150,9 @@ func newBuildCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if opts.PE && opts.WSL != nil && imgFmt != imageformat.Qcow2 {
+				return fmt.Errorf("PE+WSL1 artifacts require --image-type=qcow2")
+			}
 
 			// --vagrant (or a vagrant: block in winkit.yaml) emits a
 			// vagrant-qemu Vagrantfile next to the image. The flag wins
@@ -215,16 +208,32 @@ func newBuildCmd() *cobra.Command {
 			ui.Logger.Debug("debug artifacts", "dir", debugDir)
 			ui.Logger.Debug("structured log", "path", logPath)
 
-			// Resolve media spec from BuildOpts.From for the fetch pipeline.
-			spec, err := specFromFrom(opts.From)
+			// Resolve the media source: a local ISO path is used as-is
+			// (only virtio-win is fetched); anything else goes through
+			// the catalog fetch pipeline via a media spec.
+			localISO, localMedia, err := resolveLocalMedia(opts.From)
 			if err != nil {
 				return err
+			}
+			var spec uupdump.MediaSpec
+			if !localMedia {
+				spec, err = specFromFrom(opts.From)
+				if err != nil {
+					return err
+				}
 			}
 
 			err = func() error {
 				logger := ui.Logger
 
-				winISO, virtioISO, err := ensureCachedISOs(cmd, cacheDir, spec, noCache, ui)
+				var winISO, virtioISO string
+				if localMedia {
+					winISO = localISO
+					logger.Info("using local install media", "iso", winISO)
+					virtioISO, err = ensureVirtioISO(cmd, cacheDir, ui)
+				} else {
+					winISO, virtioISO, err = ensureCachedISOs(cmd, cacheDir, spec, noCache, ui)
+				}
 				if err != nil {
 					return err
 				}
@@ -251,7 +260,7 @@ func newBuildCmd() *cobra.Command {
 				// non-qemu backends it never appears and the capturer idles.
 				stopShots := make(chan struct{})
 				shotsDone := make(chan struct{})
-				if debug && stage != "pe" {
+				if debug && !opts.PE {
 					shotDir := filepath.Join(debugDir, "screenshots")
 					if err := os.MkdirAll(shotDir, 0o755); err != nil {
 						return err
@@ -277,11 +286,11 @@ func newBuildCmd() *cobra.Command {
 					NoCache:     noCache,
 					Accel:       accel,
 					DisplayType: displayType,
-					NixHome:     build.ResolveNixHome(""),
 					Opts:        opts,
 				}
 				if opts.WSL != nil {
 					buildCfg.WSLImage = opts.WSL.Image
+					buildCfg.NixHome = build.ResolveNixHome(opts.WSL.NixHome)
 					if opts.WSL.ServicesDir != "" {
 						svcs, err := s6.LoadDir(opts.WSL.ServicesDir)
 						if err != nil {
@@ -291,56 +300,16 @@ func newBuildCmd() *cobra.Command {
 					}
 				}
 
-				switch stage {
-				case "wsl":
-					if err := build.WSL(cmd.Context(), buildCfg); err != nil {
-						return err
-					}
-				case "base":
-					if err := build.Base(cmd.Context(), buildCfg); err != nil {
-						return err
-					}
-				default:
-					// PE mode: build boot volume only (no VM install).
-					arch := "arm64"
-					gosshdExe := filepath.Join(workDir, "gosshd.exe")
-					logger.Info("cross-compiling gosshd", "target", "windows/"+arch)
-					if err := winpe.CrossCompileGosshd(gosshdExe, arch); err != nil {
-						return err
-					}
-
-					pwshFiles, err := winpe.FetchPwshFiles(cacheDir, func(f string, a ...any) {
-						logger.Info(fmt.Sprintf(f, a...))
-					})
-					if err != nil {
-						return err
-					}
-
-					logger.Info("building PE boot volume", "stage", stage)
-					logger.Debug("image sources", "windows", winISO, "virtio", virtioISO)
-					baseCfg := winpe.BaseImageConfig{
-						WindowsISO: winISO,
-						VirtIOISO:  virtioISO,
-						GosshdExe:  gosshdExe,
-						PwshFiles:  pwshFiles,
-						WorkDir:    workDir,
-					}
-
-					var files map[string][]byte
-					files, err = winpe.BuildBaseImageFiles(baseCfg)
-					if err != nil {
-						return err
-					}
-
-					if err := qemu.CreateFATQcow2(qcow2Dest, files, baseImageCapacity); err != nil {
-						return err
-					}
+				// The CLI owns input/output only. All stage dispatch and assembly
+				// belongs to the public library entry point.
+				if err := winkit.Build(cmd.Context(), buildCfg); err != nil {
+					return err
 				}
 
 				// Sanity: a real install writes many GB; anything near the
 				// empty-qcow2 floor means the OS never landed even though
 				// the build returned cleanly (same assertion as the e2e test).
-				if stage != "pe" && os.Getenv("WINKIT_E2E_DISK") == "" {
+				if !opts.PE && os.Getenv("WINKIT_E2E_DISK") == "" {
 					const minInstalledBytes = 4 * 1024 * 1024 * 1024
 					if fi, err := os.Stat(qcow2Dest); err != nil {
 						return fmt.Errorf("produced disk missing: %w", err)
@@ -377,6 +346,11 @@ func newBuildCmd() *cobra.Command {
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s (%.0f MB) -- boot with: winkit start %s\n", dest, sz, dest)
 			}
+			if artifact, artifactErr := build.LoadArtifact(dest); artifactErr != nil {
+				return artifactErr
+			} else if artifact != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s -- writable WSL1 data disk\n", artifact.DataDisk)
+			}
 
 			if vagrantOn {
 				vfPath := filepath.Join(filepath.Dir(dest), "Vagrantfile")
@@ -400,7 +374,7 @@ func newBuildCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&configFile, "file", "f", "", "config file path (default: ./winkit.yaml or ./winkit.yml)")
 	cmd.Flags().BoolVar(&peFlag, "pe", false, "WinPE boot volume mode (~4GB, ephemeral)")
-	cmd.Flags().BoolVar(&wslFlag, "wsl", false, "enable WSL in the built image")
+	cmd.Flags().BoolVar(&wslFlag, "wsl", false, "enable WSL1 (combine with --pe for a WinPE+WSL1 bundle)")
 	cmd.Flags().StringVar(&wslImage, "wsl-image", "", "WSL distro image (alpine, ubuntu, or path to .wsl tarball)")
 	cmd.Flags().StringVar(&fromFlag, "from", "", "media source: windows/<edition>-<arch>, ./path.iso, or ./path.wim (default: windows/11-pro-arm64)")
 	cmd.Flags().StringVar(&imageTypeFlag, "image-type", "qcow2", "output image format (qcow2, utm, box)")
@@ -418,6 +392,13 @@ func newBuildCmd() *cobra.Command {
 // The second return value is the resolved path (empty when using defaults).
 func loadBuildConfig(path string) (*config.Config, string, error) {
 	if path != "" {
+		if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+			resolved, discoverErr := config.Discover(path)
+			if discoverErr != nil {
+				return nil, "", discoverErr
+			}
+			path = resolved
+		}
 		cfg, err := config.Load(path)
 		if err != nil {
 			return nil, "", err
@@ -470,9 +451,6 @@ func specFromFrom(from string) (uupdump.MediaSpec, error) {
 // exports clean). If the MCT catalog is unreachable, the default lane falls
 // back to UUP dump boot-only with a warning.
 func ensureCachedISOs(cmd *cobra.Command, cacheDir string, spec uupdump.MediaSpec, noCache bool, ui *runUI) (winISO, virtioISO string, err error) {
-	cfg := cache.Config{Dir: cacheDir}
-	virtioISO = cfg.VirtIOISO()
-
 	if noCache {
 		clearCache(cacheDir, func(format string, a ...any) {
 			ui.Logger.Info(fmt.Sprintf(format, a...))
@@ -484,17 +462,31 @@ func ensureCachedISOs(cmd *cobra.Command, cacheDir string, spec uupdump.MediaSpe
 		return "", "", err
 	}
 
+	virtioISO, err = ensureVirtioISO(cmd, cacheDir, ui)
+	if err != nil {
+		return "", "", err
+	}
+	return winISO, virtioISO, nil
+}
+
+// ensureVirtioISO returns the cached virtio-win ISO path, fetching it if
+// missing. Split out of ensureCachedISOs for local-media builds, which
+// skip the Windows ISO fetch but still need the drivers.
+func ensureVirtioISO(cmd *cobra.Command, cacheDir string, ui *runUI) (string, error) {
+	cfg := cache.Config{Dir: cacheDir}
+	virtioISO := cfg.VirtIOISO()
 	if _, err := os.Stat(virtioISO); err != nil {
 		ui.Logger.Info("virtio-win ISO not cached — fetching")
-		virtioISO, err = virtio.FetchISO(cmd.Context(), virtio.FetchConfig{
+		fetched, err := virtio.FetchISO(cmd.Context(), virtio.FetchConfig{
 			CacheDir: cacheDir,
 			Logger:   ui.Logger,
 		})
 		if err != nil {
-			return "", "", fmt.Errorf("fetching virtio-win ISO: %w", err)
+			return "", fmt.Errorf("fetching virtio-win ISO: %w", err)
 		}
+		return fetched, nil
 	}
-	return winISO, virtioISO, nil
+	return virtioISO, nil
 }
 
 // fetchWindowsISO routes to the appropriate media source based on the spec.

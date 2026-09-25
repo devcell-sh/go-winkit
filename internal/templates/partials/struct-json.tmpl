@@ -1,7 +1,7 @@
-{{define "struct-json"}}# build.jsonl is a second virtio-serial port, separate from the progress
-# stream. Scripts that skip opening it leave the file empty and read as
-# though nothing had been logged at all.
-$structPort = '\\.\Global\{{.StructPort}}'
+{{define "struct-json"}}# build.jsonl is carried on the COM2 serial port. Scripts that skip
+# opening it leave the file empty and read as though nothing had been
+# logged at all.
+$structPort = '{{.StructPort}}'
 $structStream = $null
 try {
     $structStream = [System.IO.File]::Open($structPort,

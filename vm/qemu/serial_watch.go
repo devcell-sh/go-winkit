@@ -8,10 +8,22 @@ import (
 	"time"
 )
 
-const EFIShellMarker = `"EFI Internal Shell"`
-const StartupNSHFailMarker = "BOOTAA64.EFI not found"
-const SyncExceptionMarker = "Synchronous Exception at"
-const WindowsBootManagerMarker = `"Windows Boot Manager"`
+// Serial-log markers for the boot outcomes the watchers detect. They
+// match EDK2/BdsDxe console output on the ARM64 firmware winkit ships.
+const (
+	// EFIShellMarker appears when no boot entry worked and the firmware
+	// fell through to the interactive shell — the install never started.
+	EFIShellMarker = `"EFI Internal Shell"`
+	// StartupNSHFailMarker appears when startup.nsh cannot find the
+	// bootloader on the answer volume.
+	StartupNSHFailMarker = "BOOTAA64.EFI not found"
+	// SyncExceptionMarker appears on a firmware-level CPU fault; the
+	// boot is unrecoverable.
+	SyncExceptionMarker = "Synchronous Exception at"
+	// WindowsBootManagerMarker appears when the firmware hands off to
+	// the Windows boot chain — the healthy path.
+	WindowsBootManagerMarker = `"Windows Boot Manager"`
+)
 
 // WatchSerialForEFIShell tails the serial log and sends when the firmware
 // falls through to the EFI Interactive Shell.

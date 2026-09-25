@@ -56,7 +56,8 @@ func PadForFAT(data []byte) []byte {
 	return out
 }
 
-// StructuredPortName is the virtio-serial port carrying structured JSON
-// build events (build.jsonl). Guest scripts open `\\.\Global\<name>` by this
-// exact string, so it is part of the guest/host contract, not a QEMU detail.
-const StructuredPortName = `winkit.structured.0`
+// GuestSerialPort is the COM2 device path used inside the guest for the
+// unified structured/progress serial stream. COM2 is a PCI 16550 UART
+// backed by build.jsonl on the host; it uses the inbox serial.sys driver,
+// available in all Windows phases without drvload.
+const GuestSerialPort = `\\.\COM2`

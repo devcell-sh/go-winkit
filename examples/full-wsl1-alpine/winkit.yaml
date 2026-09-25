@@ -1,0 +1,31 @@
+# Windows 11 ARM64 with an Alpine WSL distro, a custom supervised
+# service, and a post-deployment package — the standalone-consumer tour
+# of winkit's three surfaces:
+#
+#   wsl.image      any rootfs: docker ref, published tarball URL, .wsl file
+#   wsl.services   your s6 service dirs, supervised inside the distro
+#   commands.wsl   your provisioning, executed by winkit over gosshd
+#
+# Build:  winkit build            (from this directory)
+# Boot:   winkit start            (SSH: ssh -p 20022 session@127.0.0.1)
+# Check:  wsl -d winkit -- s6-svstat /etc/s6/services/myagent
+#         wsl -d winkit -- htop --version
+
+from: windows/11-pro-arm64
+
+wsl:
+  # Opaque image: winkit resolves a docker ref, builds the rootfs
+  # tarball, and imports it as distro "winkit". Swap for ubuntu, a
+  # tarball URL, or a local .wsl file — winkit does not care what's
+  # inside.
+  image: alpine
+  # s6 scan-dir layout: every subdirectory is one supervised service
+  # (run script + optional finish/data files). Baked into
+  # /etc/s6/services of the distro.
+  services: ./services
+
+commands:
+  # wsl phase: runs over gosshd after the distro is imported and its
+  # s6 supervision loop is up.
+  wsl:
+    - wsl -d winkit -- apk add htop

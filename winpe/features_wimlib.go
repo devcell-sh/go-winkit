@@ -1,4 +1,4 @@
-//go:build wimlib
+//go:build cgo
 
 package winpe
 

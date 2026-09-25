@@ -56,6 +56,11 @@ type Config struct {
 	// build. A service named like a built-in (sshd) overrides it.
 	WSLServices []s6.Service
 
+	// StructuredLogPath, when set, is the host-side file that receives
+	// the guest's structured event stream (pe-agent JSONL via
+	// virtio-serial). Empty falls back to workDir/guest.jsonl.
+	StructuredLogPath string
+
 	// Opts carries features/hooks for base installs (see buildopts).
 	Opts *buildopts.BuildOpts
 }
@@ -77,14 +82,14 @@ func WSL(ctx context.Context, c Config) error {
 		hostname = c.Opts.Hostname
 	}
 	return wslImage(ctx, c.Dest, c.CacheDir, c.WindowsISO, c.VirtIOISO, c.WorkDir,
-		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.WSLServices, c.DisplayType, ports, hostname)
+		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.WSLServices, c.DisplayType, ports, hostname, c.StructuredLogPath)
 }
 
 // Base performs a full unattended install running the hooks and features
 // from c.Opts after the OS boots.
 func Base(ctx context.Context, c Config) error {
 	return baseInstallImage(ctx, c.Dest, c.CacheDir, c.WindowsISO, c.VirtIOISO, c.WorkDir,
-		c.Opts, c.logger(), c.NoCache, c.Accel, c.DisplayType)
+		c.Opts, c.logger(), c.NoCache, c.Accel, c.DisplayType, c.StructuredLogPath)
 }
 
 // copyFile copies src to dst (0644).

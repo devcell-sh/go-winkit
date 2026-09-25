@@ -3,22 +3,16 @@ package cli
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/devcell-sh/go-winkit/build"
+	winkit "github.com/devcell-sh/go-winkit"
 	"github.com/devcell-sh/go-winkit/gosshd"
-	"github.com/devcell-sh/go-winkit/unattend"
-	"github.com/devcell-sh/go-winkit/vm"
-	"github.com/devcell-sh/go-winkit/vm/qemu"
 	"github.com/devcell-sh/go-winkit/vm/vmstate"
-	"github.com/devcell-sh/go-winkit/winpe"
 )
 
 func newStartCmd() *cobra.Command {
@@ -77,21 +71,6 @@ func newStartCmd() *cobra.Command {
 				stateDir = vmstate.DefaultDir()
 			}
 
-			existing, err := vmstate.FindByImage(stateDir, absImage)
-			if err == nil && existing != nil && vmstate.IsAlive(existing.PID) {
-				return fmt.Errorf("VM %q is already running (PID %d) from image %s",
-					existing.Name, existing.PID, absImage)
-			}
-
-			if accel == "" {
-				accel = qemu.DefaultAccel()
-			}
-			if cpus == 0 {
-				cpus = 4
-			}
-			if memoryGB == 0 {
-				memoryGB = 6
-			}
 			// winkit.yaml supplies defaults; explicit flags win.
 			if cfg.Ports != nil {
 				if !cmd.Flags().Changed("ssh-port") && cfg.Ports.Gossh != 0 {
@@ -104,15 +83,6 @@ func newStartCmd() *cobra.Command {
 			if hostname == "" {
 				hostname = cfg.Hostname
 			}
-			if hostname == "" {
-				hostname = unattend.DefaultConfig().Hostname
-			}
-			if sshPort == 0 {
-				sshPort = 20022
-			}
-			if rdpPort == 0 {
-				rdpPort = 23389
-			}
 
 			var ctx context.Context
 			var stop context.CancelFunc
@@ -123,101 +93,26 @@ func newStartCmd() *cobra.Command {
 			}
 			defer stop()
 
-			backend, backendName, err := build.ResolveBackend()
+			machine, err := winkit.Start(ctx, winkit.StartOpts{
+				Image:      absImage,
+				Name:       name,
+				Hostname:   hostname,
+				Accel:      accel,
+				StateDir:   stateDir,
+				CPUs:       cpus,
+				MemoryGB:   memoryGB,
+				SSHPort:    sshPort,
+				RDPPort:    rdpPort,
+				Foreground: foreground,
+				VNC:        vnc,
+			})
 			if err != nil {
 				return err
 			}
-
-			outDir := filepath.Join(filepath.Dir(absImage), ".winkit", "run", name)
-			if err := os.MkdirAll(outDir, 0o755); err != nil {
-				return fmt.Errorf("creating output dir: %w", err)
-			}
-
-			// run.jsonl is the run's unified structured log: host events
-			// stream in live; `winkit stop` appends the guest's raw event
-			// stream (guest.jsonl, written by the QEMU process) on teardown.
-			hostLogFile, err := os.Create(filepath.Join(outDir, "run.jsonl"))
-			if err != nil {
-				return fmt.Errorf("creating host log: %w", err)
-			}
-			defer hostLogFile.Close()
-			logger := slog.New(winpe.NewGuestEventHandler(hostLogFile))
-
-			secure := strings.HasPrefix(accel, "tcg")
-			var varsPath string
-			if !secure {
-				varsPath = build.FindSiblingVars(absImage)
-				if varsPath != "" {
-					dst := filepath.Join(outDir, "vars.fd")
-					if err := copyFile(varsPath, dst); err != nil {
-						return fmt.Errorf("copying vars: %w", err)
-					}
-					varsPath = dst
-				}
-				// When varsPath is empty, StartRun uses -kernel firmware
-				// which auto-discovers the ESP bootloader without NVRAM.
-			}
-
-			displayType := "none"
+			outDir := machine.OutputDir()
 			var vncPort uint16
 			if vnc {
-				displayType = "vnc=:0"
 				vncPort = 5900
-			}
-
-			runCfg := vm.VMRunConfig{
-				DiskPath:        absImage,
-				OutputDir:       outDir,
-				VMName:          "winkit-" + name,
-				CPUs:            cpus,
-				MemoryGB:        memoryGB,
-				Accel:           accel,
-				SSHPort:         sshPort,
-				SSHGuestPort:    2222,
-				OpenSSHHostPort: sshPort + 100,
-				RDPPort:         rdpPort,
-				SMBIOSSerial:    hostname,
-			}
-
-			structuredLog := filepath.Join(outDir, "guest.jsonl")
-
-			switch backendName {
-			case "qemu":
-				runCfg.BackendExtra = &qemu.RunOptions{
-					VarsPath:          varsPath,
-					Secure:            secure,
-					DisplayType:       displayType,
-					Detach:            !foreground,
-					StructuredLogPath: structuredLog,
-				}
-			}
-
-			logger.Info("starting VM",
-				"image", absImage, "accel", accel, "backend", backendName,
-				"cpus", cpus, "memory_gb", memoryGB)
-
-			machine, err := backend.StartRun(ctx, runCfg)
-			if err != nil {
-				return fmt.Errorf("starting VM: %w", err)
-			}
-
-			logger.Info("VM started", "pid", machine.PID(), "name", name)
-
-			st := &vmstate.State{
-				Name:      name,
-				ImagePath: absImage,
-				PID:       machine.PID(),
-				Backend:   backendName,
-				StartedAt: time.Now(),
-				SSHPort:   sshPort,
-				RDPPort:   rdpPort,
-				VNCPort:   vncPort,
-				Accel:     accel,
-				OutputDir: outDir,
-			}
-			if err := vmstate.Save(stateDir, st); err != nil {
-				machine.Stop()
-				return fmt.Errorf("saving state: %w", err)
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "VM %q started (PID %d)\n", name, machine.PID())
@@ -234,10 +129,8 @@ func newStartCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nVM running in foreground. Press Ctrl+C to stop.\n")
 				select {
 				case <-machine.Done():
-					logger.Info("VM exited")
 					fmt.Fprintln(cmd.ErrOrStderr(), "VM exited")
 				case <-ctx.Done():
-					logger.Info("interrupt received, stopping VM")
 					fmt.Fprintln(cmd.ErrOrStderr(), "\nStopping VM...")
 					machine.Stop()
 
@@ -248,9 +141,7 @@ func newStartCmd() *cobra.Command {
 					go func() { _ = machine.Wait(); close(done) }()
 					select {
 					case <-done:
-						logger.Info("VM stopped gracefully")
 					case <-forceCh:
-						logger.Info("force killing VM")
 						fmt.Fprintln(cmd.ErrOrStderr(), "Force killing VM")
 					}
 				}

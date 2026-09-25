@@ -27,21 +27,21 @@ func s6Available(t *testing.T) string {
 }
 
 func TestParseOptions_LogFlags(t *testing.T) {
-	opts, err := parseOptions([]string{"run", "--name", "svc", "--log-file", "/tmp/svc.log", "--log-virtio", `\\.\Global\winkit.progress.0`, "--", "sleep", "1"})
+	opts, err := parseOptions([]string{"run", "--name", "svc", "--log-file", "/tmp/svc.log", "--log-serial", `\\.\COM2`, "--", "sleep", "1"})
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/svc.log", opts.logFile)
-	assert.Equal(t, `\\.\Global\winkit.progress.0`, opts.logVirtio)
+	assert.Equal(t, `\\.\COM2`, opts.logSerial)
 	assert.Equal(t, []string{"sleep", "1"}, opts.cmd)
 }
 
 func TestIntegration_LogFileCapture(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "test.log")
-	virtioPath := filepath.Join(dir, "virtio.log")
+	serialPath := filepath.Join(dir, "serial.log")
 
 	opts := options{
 		logFile:   logPath,
-		logVirtio: virtioPath,
+		logSerial: serialPath,
 	}
 	out, closers := buildOutput(opts, nil)
 	defer func() {
@@ -72,10 +72,10 @@ func TestIntegration_LogFileCapture(t *testing.T) {
 	assert.Contains(t, string(data), "log-line-3")
 	t.Logf("log file: %s", strings.TrimSpace(string(data)))
 
-	vdata, err := os.ReadFile(virtioPath)
+	sdata, err := os.ReadFile(serialPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(vdata), "log-line-1")
-	t.Logf("virtio file: %s", strings.TrimSpace(string(vdata)))
+	assert.Contains(t, string(sdata), "log-line-1")
+	t.Logf("serial file: %s", strings.TrimSpace(string(sdata)))
 }
 
 func TestIntegration_S6LogPiping(t *testing.T) {
@@ -91,9 +91,9 @@ func TestIntegration_S6LogPiping(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(echoSvc, "run"), []byte(run), 0o755))
 
 	logPath := filepath.Join(dir, "captured.log")
-	virtioPath := filepath.Join(dir, "virtio.log")
+	serialPath := filepath.Join(dir, "serial.log")
 
-	opts := options{logFile: logPath, logVirtio: virtioPath}
+	opts := options{logFile: logPath, logSerial: serialPath}
 	out, closers := buildOutput(opts, nil)
 	defer func() {
 		for _, c := range closers {
