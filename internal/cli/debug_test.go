@@ -24,7 +24,7 @@ func TestRootCmd_HasDebugFlags(t *testing.T) {
 // one opting in.
 func TestDebugFlag_ReachesSubcommands(t *testing.T) {
 	root := NewRootCmd()
-	sub, _, err := root.Find([]string{"iso", "extract"})
+	sub, _, err := root.Find([]string{"export", "iso", "extract"})
 	require.NoError(t, err)
 	assert.NotNil(t, sub.InheritedFlags().Lookup("debug"),
 		"subcommands must inherit --debug from the root")
@@ -83,7 +83,7 @@ func runExtract(t *testing.T, debug, debugJSON bool) (stdout, stderr string) {
 	isoPath := filepath.Join(dir, "t.iso")
 	buildTestISO(t, isoPath)
 
-	args := []string{"iso", "extract", isoPath, "/hello.txt",
+	args := []string{"export", "iso", "extract", isoPath, "/hello.txt",
 		"--out", filepath.Join(dir, "out.txt")}
 	if debug {
 		args = append(args, "--debug")
