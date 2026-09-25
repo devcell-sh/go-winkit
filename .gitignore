@@ -20,6 +20,7 @@ test/results/*
 *.iso
 *.esd
 *.wim
+*.box
 
 # Go workspace files
 go.work

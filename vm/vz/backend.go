@@ -160,7 +160,8 @@ func (b *Backend) StartInstall(ctx context.Context, cfg vm.VMInstallConfig) (vm.
 		{bootVolume, "boot volume", bootKind},
 		{cfg.WindowsISO, "Windows ISO", "usb"},
 		{cfg.VirtIOISO, "VirtIO ISO", "usb"},
-		{cfg.AnswerVolume, "answer volume", "usb"},
+		{cfg.AnswerISO, "answer ISO", "usb"},
+		{cfg.ScratchVolume, "scratch volume", "usb"},
 	} {
 		if ud.path == "" {
 			continue

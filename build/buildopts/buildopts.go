@@ -59,6 +59,10 @@ func (h *Hook) applyDefaults() {
 
 type WSLConfig struct {
 	Image string
+	// NixHome selects the home-manager configuration for image "nix":
+	// a local directory, a remote flake ref, or empty for the embedded
+	// default. Ignored for non-nix images.
+	NixHome string
 	// ServicesDir is a directory laid out like an s6 scan dir (each
 	// subdirectory one service: run, optional finish, data files), baked
 	// into /etc/s6/services of the distro rootfs. Path only — the CLI
@@ -117,9 +121,6 @@ type BuildOpts struct {
 }
 
 func (o *BuildOpts) Validate() error {
-	if o.PE && o.WSL != nil {
-		return fmt.Errorf("pe and wsl are mutually exclusive: WinPE cannot run WSL")
-	}
 	if o.PE {
 		for _, h := range o.Hooks {
 			if h.Phase != Boot {
@@ -150,6 +151,33 @@ func (o *BuildOpts) SortHooks() {
 	sort.SliceStable(o.Hooks, func(i, j int) bool {
 		return o.Hooks[i].Phase < o.Hooks[j].Phase
 	})
+}
+
+// Stage names the build variant an opts set produces. The string values
+// double as output-image naming ("winkit-core.qcow2" etc.), matching the
+// CLI's historical stage names.
+type Stage string
+
+const (
+	// StagePE is the WinPE boot-volume build (~4GB FAT, ephemeral).
+	StagePE Stage = "core"
+	// StageWSL is a full install with WSL enabled and a distro imported.
+	StageWSL Stage = "wsl"
+	// StageBase is a full install without WSL.
+	StageBase Stage = "base"
+)
+
+// Stage resolves which build variant these opts select: PE wins, then
+// WSL, else base. PE+WSL selects the PE stage and asks its builder to
+// package the WSL1 runtime and distro into the boot artifact.
+func (o *BuildOpts) Stage() Stage {
+	if o.PE {
+		return StagePE
+	}
+	if o.WSL != nil {
+		return StageWSL
+	}
+	return StageBase
 }
 
 type FromKind int

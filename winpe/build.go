@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/devcell-sh/go-wimlib"
 	"github.com/devcell-sh/go-winkit/media/isokit"
 )
 
@@ -26,7 +27,7 @@ type BuildConfig struct {
 	// serve sessions in WinPE, so this is the base image's SSH server.
 	GosshdExe string
 
-	ProgressPort string
+	SerialPort string
 }
 
 // BuildResult holds paths to the artifacts the caller needs to boot.
@@ -52,10 +53,6 @@ func Build(cfg BuildConfig) (*BuildResult, error) {
 		return nil, fmt.Errorf("extracting WinPE stage: %w", err)
 	}
 
-	vioserialDrivers, err := LoadWinPEVioserialDrivers(cfg.VirtIOISO)
-	if err != nil {
-		return nil, fmt.Errorf("loading vioserial drivers: %w", err)
-	}
 	vioscsiDrivers, err := LoadWinPEStorageDrivers(cfg.VirtIOISO)
 	if err != nil {
 		return nil, fmt.Errorf("loading vioscsi drivers: %w", err)
@@ -82,8 +79,7 @@ func Build(cfg BuildConfig) (*BuildResult, error) {
 		return nil, fmt.Errorf("creating inject dir: %w", err)
 	}
 
-	allDrivers := mergeFileMaps(vioserialDrivers, vioscsiDrivers)
-	for answerPath, data := range allDrivers {
+	for answerPath, data := range vioscsiDrivers {
 		hostPath := filepath.Join(injectDir, filepath.FromSlash(answerPath))
 		if err := os.MkdirAll(filepath.Dir(hostPath), 0o755); err != nil {
 			return nil, err
@@ -93,7 +89,7 @@ func Build(cfg BuildConfig) (*BuildResult, error) {
 		}
 	}
 
-	pc := cfg.payloadConfig(vioserialDrivers, vioscsiDrivers)
+	pc := cfg.payloadConfig(vioscsiDrivers)
 	for name, data := range payloadFiles(pc) {
 		if err := os.WriteFile(filepath.Join(injectDir, name), data, 0o644); err != nil {
 			return nil, fmt.Errorf("writing %s: %w", name, err)
@@ -172,6 +168,14 @@ func BootVolumeFiles(stageDir string, bootWim []byte) (map[string][]byte, error)
 // ISO. This is the same FAT-boot method the base/WIM-builder paths use, because
 // booting the ISO's El Torito image directly ASSERTs on Linux-hosted EDK2.
 func BuildSetupBootVolumeFiles(winISO, workDir string) (map[string][]byte, error) {
+	return BuildSetupBootVolumeFilesPatched(winISO, workDir, nil)
+}
+
+// BuildSetupBootVolumeFilesPatched is like BuildSetupBootVolumeFiles but also
+// extracts install.wim from the ISO and applies the given patch sets to it.
+// When patches are provided, the patched install.wim is included on the boot
+// volume at \sources\install.wim so Setup uses it instead of the ISO copy.
+func BuildSetupBootVolumeFilesPatched(winISO, workDir string, installWimPatches []WimPatchSet) (map[string][]byte, error) {
 	stageDir := filepath.Join(workDir, "setup-stage")
 	if err := ExtractStage(winISO, stageDir); err != nil {
 		return nil, fmt.Errorf("extracting Setup boot stage: %w", err)
@@ -180,7 +184,38 @@ func BuildSetupBootVolumeFiles(winISO, workDir string) (map[string][]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("reading Setup boot.wim: %w", err)
 	}
-	return BootVolumeFiles(stageDir, bootWim)
+	files, err := BootVolumeFiles(stageDir, bootWim)
+	if err != nil {
+		return nil, err
+	}
+
+	// Marker lets the pe-agent discover the boot volume by drive letter
+	// during second-pass install, so it can write its log there for the
+	// host to read back without SSH.
+	files["/"+BootVolumeMarker] = []byte("winkit boot volume\n")
+
+	if len(installWimPatches) > 0 {
+		if !wimlib.Available() {
+			return nil, fmt.Errorf("install.wim patching requires wimlib: build with CGO_ENABLED=1 and install libwim (brew install wimlib)")
+		}
+		installWimPath := filepath.Join(stageDir, "sources", "install.wim")
+		if err := Extract7zToFile(winISO, "sources/install.wim", installWimPath); err != nil {
+			return nil, fmt.Errorf("extracting install.wim: %w", err)
+		}
+		for _, ps := range installWimPatches {
+			if err := PatchWIM(installWimPath, ps); err != nil {
+				return nil, fmt.Errorf("patching install.wim (image %d): %w", ps.ImageNum, err)
+			}
+		}
+		installWim, err := os.ReadFile(installWimPath)
+		if err != nil {
+			return nil, fmt.Errorf("reading patched install.wim: %w", err)
+		}
+		files["/sources/install.wim"] = installWim
+		os.Remove(installWimPath)
+	}
+
+	return files, nil
 }
 
 func (c BuildConfig) wimPrepOps() []WimPrepOp {
@@ -212,17 +247,14 @@ func payloadFiles(pc PayloadConfig) map[string][]byte {
 	}
 }
 
-func (c BuildConfig) payloadConfig(vioserialDrivers, vioscsiDrivers map[string][]byte) PayloadConfig {
+func (c BuildConfig) payloadConfig(vioscsiDrivers map[string][]byte) PayloadConfig {
 	pc := PayloadConfig{
-		WPEInit:      true,
-		ProgressPort: c.ProgressPort,
-		PollSeconds:  5,
-		SyncAgent:    true,
+		WPEInit:     true,
+		SerialPort:  c.SerialPort,
+		PollSeconds: 5,
+		SyncAgent:   true,
 	}
 	var infs []string
-	if len(vioserialDrivers) > 0 {
-		infs = append(infs, `X:\winkit\drivers\vioserial\vioser.inf`)
-	}
 	if len(vioscsiDrivers) > 0 {
 		infs = append(infs, `X:\winkit\drivers\vioscsi\vioscsi.inf`)
 	}
@@ -230,12 +262,3 @@ func (c BuildConfig) payloadConfig(vioserialDrivers, vioscsiDrivers map[string][
 	return pc
 }
 
-func mergeFileMaps(maps ...map[string][]byte) map[string][]byte {
-	out := make(map[string][]byte)
-	for _, m := range maps {
-		for k, v := range m {
-			out[k] = v
-		}
-	}
-	return out
-}

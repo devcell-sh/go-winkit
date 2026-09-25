@@ -73,6 +73,12 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// S6HealthcheckService polls all sibling s6 services and the W: drive
+// mount, emitting JSONL to stdout every 30 seconds. When the s6 supervisor
+// runs under winkit-service with --log-serial, these events reach the host
+// structured log (build.jsonl).
+func S6HealthcheckService() s6.Service { return builtinService("common", "s6-healthcheck") }
+
 // DirShareService generates a service that (re)applies the host dir-share
 // symlinks every boot: the mount script runs, then the service parks so
 // s6-supervise does not respawn it in a loop.

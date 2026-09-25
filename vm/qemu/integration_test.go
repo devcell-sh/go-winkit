@@ -75,7 +75,7 @@ func TestWimBuilder(t *testing.T) {
 					GosshdExe:    gosshdExe,
 					OutputDir:    outDir,
 					VirtIO:       true,
-					ProgressPort: `\\.\Global\` + ProgressPortName,
+					SerialPort: winpe.GuestSerialPort,
 				},
 				PollInterval: 15 * time.Second,
 				// The full DISM pass finishes at ~25.5 min under TCG in

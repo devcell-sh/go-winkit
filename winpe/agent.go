@@ -7,10 +7,11 @@ import (
 	"github.com/devcell-sh/go-winkit/internal/templates"
 )
 
-// ProgressPortName is the virtio-serial port name used for guest-to-host
-// progress reporting. The host must attach a virtserialport with this name;
-// the generated agent scripts open \\.\Global\<name> from inside the guest.
-const ProgressPortName = `winkit.progress.0`
+// AgentLauncherLog is the diagnostic log the windowsPE RunSynchronous
+// launcher writes to the answer volume. It records which drive letter
+// was found, whether pwsh.exe and the agent script exist, and whether
+// the agent was started. Readable from the host after the build.
+const AgentLauncherLog = `winkit-launcher.log`
 
 // WinPE payload layout. These files are baked into boot.wim so they exist on
 // the WinPE RAM drive (X:) before setup.exe starts.
@@ -53,16 +54,19 @@ const (
 	AgentScriptName = `winkit-agent.ps1`
 	// SetupActSnapshotName receives the agent's periodic copy of WinPE's
 	// X:\Windows\Panther\setupact.log, which otherwise dies with the RAM
-	// disk (CELL-364).
-	SetupActSnapshotName = `winkit-setupact.log`
+	// disk (CELL-364). The x- prefix distinguishes it from the C:\ target
+	// disk variant written during the second-pass install phase.
+	SetupActSnapshotName = `x-winkit-setupact.log`
 	// SetupErrSnapshotName receives setuperr.log the same way.
-	SetupErrSnapshotName = `winkit-setuperr.log`
+	SetupErrSnapshotName = `x-winkit-setuperr.log`
 	// SetupAPISnapshotName receives X:\Windows\INF\setupapi.dev.log, PnP's
 	// full driver-binding trace. drvload.exe has no verbose switch, so this
 	// is the only way to see why a driver did or did not bind.
-	SetupAPISnapshotName = `winkit-setupapi.dev.log`
+	SetupAPISnapshotName = `x-winkit-setupapi.dev.log`
+	// Target disk (C:\) snapshots for the second-pass install phase.
+	SetupActTargetSnapshotName = `c-winkit-setupact.log`
+	SetupErrTargetSnapshotName = `c-winkit-setuperr.log`
 
-	// ProgressPortName lives in command.go (where the QEMU device is wired).
 )
 
 // AgentLauncherCommand returns the one non-registry command allowed in
@@ -73,8 +77,74 @@ const (
 //
 // Uses cmd.exe because stock WinPE lacks powershell.exe. The answer volume
 // carries pwsh.exe (PowerShell 7) which the agent needs at runtime.
+// The actual logic lives in AgentLauncherScript (winkit-launch.cmd on the
+// answer volume); this one-liner just finds and calls it.
 func AgentLauncherCommand() string {
-	return `cmd.exe /c "for %l in (C D E F G H I J K L) do @if exist %l:\` + PwshVolDir + `\pwsh.exe if exist %l:\` + AgentScriptName + ` start /min %l:\` + PwshVolDir + `\pwsh.exe -ExecutionPolicy Bypass -File %l:\` + AgentScriptName + ` %l: & exit /b 0"`
+	return `cmd.exe /c "for %l in (C D E F G H I J K L) do @if exist %l:\` + AgentLauncherScript + ` %l:\` + AgentLauncherScript + ` %l: & exit /b 0"`
+}
+
+// AgentLauncherScript is the cmd batch file shipped on the answer volume.
+// The windowsPE RunSynchronous command finds and calls it; the script does
+// the heavy lifting (diagnostics, guards, starting the agent).
+const AgentLauncherScript = `winkit-launch.cmd`
+
+// GenerateAgentLauncherScript produces the batch file that the windowsPE
+// RunSynchronous one-liner calls. It logs diagnostics to AgentLauncherLog,
+// verifies pwsh.exe and the agent script exist, and starts the agent
+// detached. Every path is guarded and logged so a silent failure is
+// diagnosable from the answer volume after the build.
+func GenerateAgentLauncherScript() []byte {
+	// %1 is the drive letter passed by AgentLauncherCommand (e.g. "E:").
+	return []byte("@echo off\r\n" +
+		"set _WK=%1\r\n" +
+		"set _LOG=%_WK%\\" + AgentLauncherLog + "\r\n" +
+		"echo %date% %time% launcher: volume=%_WK% >>%_LOG%\r\n" +
+		"if not exist %_WK%\\" + PwshVolDir + "\\pwsh.exe (\r\n" +
+		"  echo %date% %time% launcher: FAIL pwsh not found at %_WK%\\" + PwshVolDir + "\\pwsh.exe >>%_LOG%\r\n" +
+		"  dir %_WK%\\ >>%_LOG% 2>&1\r\n" +
+		"  exit /b 0\r\n" +
+		")\r\n" +
+		"echo %date% %time% launcher: pwsh OK >>%_LOG%\r\n" +
+		"if not exist %_WK%\\" + AgentScriptName + " (\r\n" +
+		"  echo %date% %time% launcher: FAIL agent script not found at %_WK%\\" + AgentScriptName + " >>%_LOG%\r\n" +
+		"  dir %_WK%\\ >>%_LOG% 2>&1\r\n" +
+		"  exit /b 0\r\n" +
+		")\r\n" +
+		"echo %date% %time% launcher: agent script OK >>%_LOG%\r\n" +
+		"echo %date% %time% launcher: starting agent >>%_LOG%\r\n" +
+		"start /min %_WK%\\" + PwshVolDir + "\\pwsh.exe -ExecutionPolicy Bypass -File %_WK%\\" + AgentScriptName + " %_WK%\r\n" +
+		"echo %date% %time% launcher: agent started >>%_LOG%\r\n" +
+		"exit /b 0\r\n")
+}
+
+// PEAgentLauncherCommand returns the windowsPE RunSynchronous one-liner
+// that finds winkit-service.exe on a removable volume and starts the
+// native pe-agent detached. Replaces the PS1 agent: no pwsh dependency.
+// The exit /b 0 wrapper guarantees a zero exit code so Setup is never aborted.
+func PEAgentLauncherCommand(serviceBinaryName string) string {
+	return `cmd.exe /c "for %l in (C D E F G H I J K L) do @if exist %l:\` + serviceBinaryName +
+		` start /min %l:\` + serviceBinaryName +
+		` run --name pe-agent` +
+		`" & exit /b 0`
+}
+
+// GeneratePEAgentLauncherScript produces the batch file equivalent for
+// the PE standalone path (boot.wim injection). The bootstrap.cmd calls
+// this to start the pe-agent from the answer volume.
+func GeneratePEAgentLauncherScript(serviceBinaryName string) []byte {
+	return []byte("@echo off\r\n" +
+		"set _WK=%1\r\n" +
+		"set _LOG=%_WK%\\" + AgentLauncherLog + "\r\n" +
+		"echo %date% %time% launcher: volume=%_WK% >>%_LOG%\r\n" +
+		"if not exist %_WK%\\" + serviceBinaryName + " (\r\n" +
+		"  echo %date% %time% launcher: FAIL " + serviceBinaryName + " not found >>%_LOG%\r\n" +
+		"  dir %_WK%\\ >>%_LOG% 2>&1\r\n" +
+		"  exit /b 0\r\n" +
+		")\r\n" +
+		"echo %date% %time% launcher: starting pe-agent >>%_LOG%\r\n" +
+		"start /min %_WK%\\" + serviceBinaryName + " run --name pe-agent\r\n" +
+		"echo %date% %time% launcher: pe-agent started >>%_LOG%\r\n" +
+		"exit /b 0\r\n")
 }
 
 // DriverLoadCommand returns a windowsPE RunSynchronous command that
@@ -286,18 +356,11 @@ type PayloadConfig struct {
 	// empty: NVMe and USB storage have inbox Windows ARM64 drivers, so
 	// injection is only needed for extras like virtio-net.
 	DriverINFs []string
-	// ProgressPort is the guest device path for progress reporting. On ARM64
-	// this must be a virtio-serial port (e.g. "\\.\Global\winkit.progress.0")
-	// because PCI-serial 16550 devices don't map to user-mode COMx. Pair with
-	// Spec.GuestProgressLogPath so the host can read it.
-	ProgressPort string
-	// StructuredPort, when set, makes the agent tee Setup's Panther logs
-	// (setupact/setuperr) to this virtio-serial port as flat JSON lines
-	// ({"ts","event","line","src"}) matching the GuestEvent schema — the
-	// windowsPE phase's only feed into build.jsonl (gosshd starts in
-	// specialize). Opened lazily: the vioserial driver is drvloaded after
-	// the agent starts.
-	StructuredPort string
+	// SerialPort is the guest device path for the unified COM2 serial port.
+	// Carries both progress markers and structured JSON (build.jsonl feed).
+	// Uses the inbox serial.sys driver (pci-serial 16550), available in all
+	// three phases (WinPE, second-pass Setup, desktop) without drvload.
+	SerialPort string
 	// WPEInit causes the bootstrap to call wpeinit before anything else.
 	// Required when booting WinPE standalone (no setup.exe) — without it,
 	// serial ports and other hardware are not initialized.
@@ -343,7 +406,7 @@ func GenerateBootstrapCmd() []byte {
 
 // GenerateBootstrap produces a PowerShell script that runs before
 // setup.exe: initializes WinPE, loads requested drivers, opens the
-// virtio-serial progress port, and launches the agent.
+// serial port for progress, and launches the agent.
 //
 // Launched by the cmd.exe shim via pwsh.exe (PowerShell 7). Uses $PSHOME
 // to locate the same pwsh.exe binary for spawning the agent.
@@ -355,10 +418,8 @@ func GenerateBootstrap(cfg PayloadConfig) []byte {
 		b.WriteString("& wpeinit\r\n")
 	}
 
-	// Load drivers before writing to virtio-serial: the vioserial port
-	// device doesn't exist until its driver is loaded. That ordering is also
-	// why the exit codes are collected here and reported below rather than
-	// printed as we go — there is nowhere to report them to yet.
+	// Load drivers before anything else. Exit codes are collected here and
+	// reported below rather than printed as we go.
 	if len(cfg.DriverINFs) > 0 {
 		b.WriteString("$drvload = @()\r\n")
 	}
@@ -406,8 +467,7 @@ func GenerateAgent(cfg PayloadConfig) []byte {
 	}
 
 	data := struct {
-		ProgressPort     string
-		StructuredPort   string
+		SerialPort       string
 		VolumeMarker     string
 		CommandFile      string
 		ResultFile       string
@@ -417,8 +477,7 @@ func GenerateAgent(cfg PayloadConfig) []byte {
 		SetupAPISnapshot string
 		PollSeconds      int
 	}{
-		ProgressPort:     cfg.ProgressPort,
-		StructuredPort:   cfg.StructuredPort,
+		SerialPort:       cfg.SerialPort,
 		VolumeMarker:     AgentVolumeMarker,
 		CommandFile:      AgentCommandFile,
 		ResultFile:       AgentResultFile,
@@ -517,10 +576,10 @@ func GenerateEchoProbeScript(viofsTag string) []byte {
 	return []byte(b.String())
 }
 
-// psProgressLine emits a PowerShell line that writes to the progress port.
+// psProgressLine emits a PowerShell line that writes to the serial port.
 func psProgressLine(cfg PayloadConfig, msg string) string {
-	if cfg.ProgressPort == "" {
+	if cfg.SerialPort == "" {
 		return ""
 	}
-	return fmt.Sprintf("\"winkit: %s\" | Out-File -Append '%s' -Encoding utf8\r\n", msg, cfg.ProgressPort)
+	return fmt.Sprintf("\"winkit: %s\" | Out-File -Append '%s' -Encoding utf8\r\n", msg, cfg.SerialPort)
 }

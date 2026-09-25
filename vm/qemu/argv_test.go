@@ -87,9 +87,8 @@ func TestBuildWimBuilderArgv_BaseCommand(t *testing.T) {
 	assert.Contains(t, joined, "-no-reboot")
 }
 
-func TestBaseCommand_WiresStructuredPort(t *testing.T) {
+func TestBaseCommand_WiresPCISerial(t *testing.T) {
 	s := testSpec()
-	s.GuestProgressLogPath = "/tmp/build.log"
 	s.GuestStructuredLogPath = "/tmp/build.jsonl"
 	wbs := WimBuilderSpec{
 		Spec:     s,
@@ -98,15 +97,18 @@ func TestBaseCommand_WiresStructuredPort(t *testing.T) {
 	argv := BuildWimBuilderArgv(wbs)
 	joined := strings.Join(argv, " ")
 
-	assert.Contains(t, joined, "winkit.structured.0",
-		"structured port must be wired when GuestStructuredLogPath is set")
+	assert.Contains(t, joined, "pci-serial,chardev=gueststruct",
+		"pci-serial device must be wired when GuestStructuredLogPath is set")
 	assert.Contains(t, joined, "path=/tmp/build.jsonl",
 		"structured chardev must point to the configured path")
+	assert.NotContains(t, joined, "virtio-serial",
+		"virtio-serial must not appear in the argv")
+	assert.NotContains(t, joined, "virtserialport",
+		"virtserialport must not appear in the argv")
 }
 
-func TestBaseCommand_NoStructuredPortWithoutPath(t *testing.T) {
+func TestBaseCommand_NoPCISerialWithoutPath(t *testing.T) {
 	s := testSpec()
-	s.GuestProgressLogPath = "/tmp/build.log"
 	wbs := WimBuilderSpec{
 		Spec:     s,
 		WinPEISO: "/tmp/winpe.iso",
@@ -114,8 +116,21 @@ func TestBaseCommand_NoStructuredPortWithoutPath(t *testing.T) {
 	argv := BuildWimBuilderArgv(wbs)
 	joined := strings.Join(argv, " ")
 
-	assert.NotContains(t, joined, "winkit.structured.0",
-		"structured port must NOT be wired when GuestStructuredLogPath is empty")
+	assert.NotContains(t, joined, "pci-serial",
+		"pci-serial must NOT be wired when GuestStructuredLogPath is empty")
+}
+
+func TestAppendNVMeDisk_Nonboot(t *testing.T) {
+	s := testSpec()
+	argv := BuildQcowBootArgv(s, "/tmp/pe.qcow2")
+	argv = AppendNVMeDisk(argv, "/tmp/reference-overlay.qcow2", "reference0", "winkit-reference")
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined,
+		"file=/tmp/reference-overlay.qcow2,format=qcow2,if=none,id=reference0")
+	assert.Contains(t, joined, "nvme,drive=reference0,serial=winkit-reference")
+	assert.Equal(t, 2, strings.Count(joined, "bootindex="),
+		"only the scratch disk and PE USB volume may have boot priority")
 }
 
 func TestApplyDefaults_CDBusSCSI(t *testing.T) {

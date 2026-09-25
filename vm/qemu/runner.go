@@ -77,7 +77,6 @@ func (r *Runner) Boot(ctx context.Context, bs winpe.BootSpec) (winpe.Guest, erro
 	}
 
 	serialLog := filepath.Join(outDir, "serial.log")
-	progressLog := filepath.Join(outDir, "guest-progress.log")
 	structuredLog := filepath.Join(outDir, "build.jsonl")
 
 	spec := Spec{
@@ -91,7 +90,6 @@ func (r *Runner) Boot(ctx context.Context, bs winpe.BootSpec) (winpe.Guest, erro
 		DisplayType:            "none",
 		NoReboot:               true,
 		SerialLogPath:          serialLog,
-		GuestProgressLogPath:   progressLog,
 		GuestStructuredLogPath: structuredLog,
 		CDBus:                  r.CDBus,
 	}
@@ -135,7 +133,6 @@ func (r *Runner) Boot(ctx context.Context, bs winpe.BootSpec) (winpe.Guest, erro
 		qmpSock:       qmpSock,
 		screenshotDir: screenshotDir,
 		outDir:        outDir,
-		progressLog:   progressLog,
 		doneCh:        make(chan struct{}),
 		fatalCh:       make(chan string, 1),
 	}
@@ -170,7 +167,6 @@ type guest struct {
 	outDir        string
 	doneCh        chan struct{}
 	fatalCh       chan string
-	progressLog   string
 	screenshotSeq int
 }
 
@@ -184,11 +180,11 @@ func (g *guest) StructuredLogPath() string {
 	return filepath.Join(g.outDir, "build.jsonl")
 }
 
-// ProgressContains reports whether the streamed guest progress log carries
-// the token. The guest's FAT writes only reach the shared image after
-// shutdown, so this stream is the only live completion signal.
+// ProgressContains reports whether the structured log (build.jsonl) carries
+// the token. Progress messages are merged into the structured log via
+// the pci-serial COM2 port.
 func (g *guest) ProgressContains(token string) bool {
-	data, err := os.ReadFile(g.progressLog)
+	data, err := os.ReadFile(g.StructuredLogPath())
 	return err == nil && strings.Contains(string(data), token)
 }
 

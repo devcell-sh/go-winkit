@@ -10,7 +10,6 @@ const (
 	USBBusID         = "usb-bus"
 	CDBusID          = "cd-scsi-bus"
 	InstallerCDDevID = "installer-cd"
-	ProgressPortName = "winkit.progress.0"
 )
 
 // BuildWinPECommand constructs the QEMU argv for booting WinPE.
@@ -113,14 +112,14 @@ func buildWimBuilderSCSI(wbs WimBuilderSpec) []string {
 // windowsISO is the Windows ARM64 installer. autounattendImage is a FAT image
 // or .iso with autounattend.xml. devcellWimImg is an optional FAT/qcow2 volume
 // carrying a custom winkit.wim.
-func BuildInstallCommand(spec Spec, windowsISO, autounattendImage, devcellWimImg string) []string {
+func BuildInstallCommand(spec Spec, windowsISO, answerISO, scratchVolume, devcellWimImg string) []string {
 	if spec.CDBus == "scsi" {
-		return buildInstallSCSI(spec, windowsISO, autounattendImage, devcellWimImg)
+		return buildInstallSCSI(spec, windowsISO, answerISO, scratchVolume, devcellWimImg)
 	}
-	return buildInstallUSB(spec, windowsISO, autounattendImage, devcellWimImg)
+	return buildInstallUSB(spec, windowsISO, answerISO, scratchVolume, devcellWimImg)
 }
 
-func buildInstallUSB(spec Spec, windowsISO, autounattendImage, devcellWimImg string) []string {
+func buildInstallUSB(spec Spec, windowsISO, answerISO, scratchVolume, devcellWimImg string) []string {
 	argv := baseCommand(spec)
 	bootIdx := 1
 	nextIdx := 0
@@ -141,16 +140,21 @@ func buildInstallUSB(spec Spec, windowsISO, autounattendImage, devcellWimImg str
 		nextIdx++
 	}
 
-	switch {
-	case autounattendImage == "":
-	case strings.HasSuffix(autounattendImage, ".iso"):
+	if answerISO != "" {
 		argv = append(argv,
-			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom%d", autounattendImage, nextIdx),
+			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom%d", answerISO, nextIdx),
 			"-device", fmt.Sprintf("usb-storage,drive=cdrom%d,removable=true,bus=%s.0", nextIdx, USBBusID))
-	default:
+		nextIdx++
+	}
+
+	if scratchVolume != "" {
+		driveFormat := "raw"
+		if strings.HasSuffix(scratchVolume, ".qcow2") {
+			driveFormat = "qcow2"
+		}
 		argv = append(argv,
-			"-drive", fmt.Sprintf("file=%s,format=raw,if=none,id=usbfat0", autounattendImage),
-			"-device", fmt.Sprintf("usb-storage,drive=usbfat0,removable=true,bus=%s.0,bootindex=%d", USBBusID, bootIdx))
+			"-drive", fmt.Sprintf("file=%s,format=%s,if=none,id=scratch0", scratchVolume, driveFormat),
+			"-device", fmt.Sprintf("usb-storage,drive=scratch0,removable=true,bus=%s.0,bootindex=%d", USBBusID, bootIdx))
 	}
 
 	if devcellWimImg != "" {
@@ -166,7 +170,7 @@ func buildInstallUSB(spec Spec, windowsISO, autounattendImage, devcellWimImg str
 	return applySSHForward(spec, argv)
 }
 
-func buildInstallSCSI(spec Spec, windowsISO, autounattendImage, devcellWimImg string) []string {
+func buildInstallSCSI(spec Spec, windowsISO, answerISO, scratchVolume, devcellWimImg string) []string {
 	argv := baseCommand(spec)
 	bootIdx := 1
 	nextIdx := 0
@@ -189,16 +193,21 @@ func buildInstallSCSI(spec Spec, windowsISO, autounattendImage, devcellWimImg st
 		nextIdx++
 	}
 
-	switch {
-	case autounattendImage == "":
-	case strings.HasSuffix(autounattendImage, ".iso"):
+	if answerISO != "" {
 		argv = append(argv,
-			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom%d", autounattendImage, nextIdx),
+			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom%d", answerISO, nextIdx),
 			"-device", fmt.Sprintf("scsi-cd,drive=cdrom%d,bus=%s.0", nextIdx, CDBusID))
-	default:
+		nextIdx++
+	}
+
+	if scratchVolume != "" {
+		driveFormat := "raw"
+		if strings.HasSuffix(scratchVolume, ".qcow2") {
+			driveFormat = "qcow2"
+		}
 		argv = append(argv,
-			"-drive", fmt.Sprintf("file=%s,format=raw,if=none,id=usbfat0", autounattendImage),
-			"-device", fmt.Sprintf("usb-storage,drive=usbfat0,removable=true,bus=%s.0,bootindex=%d", USBBusID, bootIdx))
+			"-drive", fmt.Sprintf("file=%s,format=%s,if=none,id=scratch0", scratchVolume, driveFormat),
+			"-device", fmt.Sprintf("usb-storage,drive=scratch0,removable=true,bus=%s.0,bootindex=%d", USBBusID, bootIdx))
 	}
 
 	if devcellWimImg != "" {
@@ -226,6 +235,20 @@ func BuildQcowBootArgv(spec Spec, volumeImg string) []string {
 	return applySSHForward(spec, argv)
 }
 
+// AppendNVMeDisk attaches a nonboot disk to an existing QEMU argv. With no
+// bootindex the disk is available to the guest without competing with the
+// explicitly indexed boot devices. Callers that must protect a base image
+// should pass a copy-on-write overlay created by CreateOverlay.
+func AppendNVMeDisk(argv []string, diskPath, driveID, serial string) []string {
+	driveFormat := "raw"
+	if strings.HasSuffix(strings.ToLower(diskPath), ".qcow2") {
+		driveFormat = "qcow2"
+	}
+	return append(argv,
+		"-drive", fmt.Sprintf("file=%s,format=%s,if=none,id=%s", diskPath, driveFormat, driveID),
+		"-device", fmt.Sprintf("nvme,drive=%s,serial=%s", driveID, serial))
+}
+
 // BuildSetupBootArgv boots a full unattended Windows install. bootVolume is a
 // FAT qcow2 carrying the retail Setup boot chain (winpe.BuildSetupBootVolumeFiles)
 // and gets bootindex=1; the empty NVMe target (spec.DiskPath, bootindex=0 in
@@ -235,7 +258,7 @@ func BuildQcowBootArgv(spec Spec, volumeImg string) []string {
 // install time; the target is NVMe, also inbox). The answer volume carries
 // autounattend.xml + first-logon bootstrap; the virtio ISO ships the drivers
 // the answer file registers in specialize.
-func BuildSetupBootArgv(spec Spec, bootVolume, windowsISO, answerVolume string) []string {
+func BuildSetupBootArgv(spec Spec, bootVolume, windowsISO, answerISO, scratchVolume string) []string {
 	argv := baseCommand(spec)
 
 	argv = append(argv,
@@ -248,14 +271,20 @@ func BuildSetupBootArgv(spec Spec, bootVolume, windowsISO, answerVolume string) 
 			"-device", fmt.Sprintf("usb-storage,drive=wincd,removable=true,bus=%s.0", USBBusID))
 	}
 
-	if answerVolume != "" {
+	if answerISO != "" {
+		argv = append(argv,
+			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=answercd", answerISO),
+			"-device", fmt.Sprintf("usb-storage,drive=answercd,removable=true,bus=%s.0", USBBusID))
+	}
+
+	if scratchVolume != "" {
 		driveFormat := "raw"
-		if strings.HasSuffix(answerVolume, ".qcow2") {
+		if strings.HasSuffix(scratchVolume, ".qcow2") {
 			driveFormat = "qcow2"
 		}
 		argv = append(argv,
-			"-drive", fmt.Sprintf("file=%s,format=%s,if=none,id=answer0", answerVolume, driveFormat),
-			"-device", fmt.Sprintf("usb-storage,drive=answer0,removable=true,bus=%s.0", USBBusID))
+			"-drive", fmt.Sprintf("file=%s,format=%s,if=none,id=scratch0", scratchVolume, driveFormat),
+			"-device", fmt.Sprintf("usb-storage,drive=scratch0,removable=true,bus=%s.0", USBBusID))
 	}
 
 	if spec.VirtIOISO != "" {
@@ -374,21 +403,10 @@ func baseCommand(spec Spec) []string {
 		argv = append(argv, "-serial", "file:"+spec.SerialLogPath)
 	}
 
-	needsSerialBus := spec.GuestProgressLogPath != "" || spec.GuestStructuredLogPath != ""
-	if needsSerialBus {
-		argv = append(argv, "-device", "virtio-serial-pci,id=virtio-serial0")
-	}
-
-	if spec.GuestProgressLogPath != "" {
-		argv = append(argv,
-			"-chardev", "file,id=guestprog,path="+spec.GuestProgressLogPath,
-			"-device", "virtserialport,bus=virtio-serial0.0,chardev=guestprog,name="+ProgressPortName)
-	}
-
 	if spec.GuestStructuredLogPath != "" {
 		argv = append(argv,
-			"-chardev", "file,id=gueststruct,path="+spec.GuestStructuredLogPath,
-			"-device", "virtserialport,bus=virtio-serial0.0,chardev=gueststruct,name=winkit.structured.0")
+			"-chardev", "file,id=gueststruct,path="+spec.GuestStructuredLogPath+",append=on",
+			"-device", "pci-serial,chardev=gueststruct")
 	}
 
 	argv = append(argv,

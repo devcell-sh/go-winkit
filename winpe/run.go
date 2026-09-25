@@ -205,7 +205,7 @@ func startScreenshotLoop(guest Guest, interval time.Duration, done <-chan struct
 
 func collectLogs(guest Guest) map[string]string {
 	logs := make(map[string]string)
-	for _, name := range []string{AgentResultFile, "serial.log", "guest-progress.log"} {
+	for _, name := range []string{AgentResultFile, "serial.log"} {
 		if data, err := guest.ReadSharedFile("/" + name); err == nil {
 			logs[name] = string(data)
 		}

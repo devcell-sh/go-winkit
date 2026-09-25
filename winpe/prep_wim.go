@@ -84,7 +84,7 @@ type wimBuilderOp struct {
 }
 
 type wimBuilderData struct {
-	StructuredPortName string
+	SerialPort string
 	NeedsInstallWim    bool
 	UnmountInstallWim  bool
 	NeedsVirtIO        bool
@@ -138,7 +138,7 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	}
 
 	data := wimBuilderData{
-		StructuredPortName: StructuredPortName,
+		SerialPort: GuestSerialPort,
 		NeedsInstallWim:    needsInstallWim,
 		UnmountInstallWim:  cfg.UnmountInstallWim,
 		NeedsVirtIO:        needsVirtIO,
@@ -153,6 +153,32 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	out := templates.Render("wim-builder.ps1.tmpl", data)
 	out = strings.ReplaceAll(out, "\n", "\r\n")
 	return []byte(out)
+}
+
+// WSL1FeaturePrepOps returns the servicing operations to enable the
+// Microsoft-Windows-Subsystem-Linux optional feature (lxcore.sys / lxss.sys)
+// in a WIM via DISM offline servicing. The feature's backing packages are
+// discovered from install.wim and imported before Enable-Feature runs.
+//
+// Note: this only works when servicing install.wim (SourceWim="install.wim",
+// WimImageIndex=1). Enabling inbox optional features in boot.wim fails with
+// CBS 0x800f080c because boot.wim's parent package is
+// Microsoft-Windows-WinPE-Package, not Microsoft-Windows-Foundation-Package.
+func WSL1FeaturePrepOps() []WimPrepOp {
+	return []WimPrepOp{
+		{Feature: "Microsoft-Windows-Subsystem-Linux"},
+	}
+}
+
+// WSL1FilesPaths lists System32 files that the WSL1 subsystem provides.
+// On Windows 11 ARM64, the kernel driver (lxcore.sys) and some utilities
+// (bash.exe) live only in WinSxS, not under System32; TransferWSL1Files
+// discovers those by prefix-matching WinSxS directory names.
+var WSL1FilesPaths = []string{
+	`\Windows\System32\wsl.exe`,
+	`\Windows\System32\wslapi.dll`,
+	`\Windows\System32\lxutil.dll`,
+	`\Windows\System32\lxss`,
 }
 
 // OpenSSHPrepOps returns the servicing operations to add OpenSSH to a

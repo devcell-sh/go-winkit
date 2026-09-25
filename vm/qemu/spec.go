@@ -34,7 +34,6 @@ type Spec struct {
 	CDBus          string
 
 	SerialLogPath          string
-	GuestProgressLogPath   string
 	GuestStructuredLogPath string
 
 	VirtIOISO string

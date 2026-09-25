@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Continue'
 $Shared = $args[0]
 
-# --- Structured JSONL port (second virtio-serial device) ---
-$structPort = '\\.\Global\{{.StructuredPortName}}'
+# --- Structured JSONL port (COM2 pci-serial) ---
+$structPort = '{{.SerialPort}}'
 $structStream = $null
 try {
     $structStream = [System.IO.File]::Open($structPort,

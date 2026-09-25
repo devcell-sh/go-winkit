@@ -3,6 +3,7 @@
 # FirstLogonCommands. Do not edit in the guest; regenerate on the host.
 $ErrorActionPreference = 'Stop'
 $script:failed = @()
+$script:distroOk = $false
 
 # Start a transcript on C: immediately: before the volume scan or anything
 # else that can fail: so a bootstrap failure is never invisible. The answer-
@@ -29,57 +30,59 @@ try {
     }
 } catch { Write-Warning "answer-volume scan failed: $_" }
 
+# The scratch FAT volume is the guest-writable place the host can read back.
+# Separate from the read-only answer ISO (Joliet).
+$writeVol = $null
+try {
+    foreach ($d in (Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter })) {
+        if (Test-Path ("{0}:\winkit-scratch.marker" -f $d.DriveLetter) -ErrorAction SilentlyContinue) {
+            $writeVol = "{0}:" -f $d.DriveLetter
+            break
+        }
+    }
+} catch { Write-Warning "scratch-volume scan failed: $_" }
+
 function Send-Progress([string]$msg) {
     $line = "winkit-bootstrap: $msg"
     Write-Output $line
-    # The virtio-serial port is the only reliable guest->host channel on ARM64:
-    # PL011 UART doesn't register as a COMx port in Windows, and the -serial
-    # device is shared with UEFI firmware output. The vioserial driver must be
-    # installed in the specialize pass (alongside NetKVM) for this path to
-    # exist: it is NOT carried over from the WinPE drvload.
-    #
-    # System.IO.File::Open rejects device paths (\\.\...): CreateFile is
-    # required; its handle is then wrapped in a FileStream.
-    $port = '\\.\Global\winkit.progress.0'
+    # COM2 is the PCI 16550 serial port backed by build.jsonl on the host.
+    # Uses the inbox serial.sys driver, available immediately without drvload.
+    $port = '{{.StructPort}}'
     try {
-        if (-not ('Win32.Kernel32' -as [type])) {
-            Add-Type -MemberDefinition @'
-[DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
-public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
-    string lpFileName, uint dwDesiredAccess, uint dwShareMode,
-    IntPtr lpSecurityAttributes, uint dwCreationDisposition,
-    uint dwFlagsAndAttributes, IntPtr hTemplateFile);
-'@ -Name 'Kernel32' -Namespace 'Win32'
-        }
-        $h = [Win32.Kernel32]::CreateFile($port, 0x40000000, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
-        if (-not $h.IsInvalid) {
-            $fs = New-Object System.IO.FileStream($h, [System.IO.FileAccess]::Write)
-            $sw = New-Object System.IO.StreamWriter($fs)
-            $sw.WriteLine($line)
-            $sw.Flush()
-            $sw.Close()
-            $fs.Close()
-        }
+        $fs = [System.IO.File]::Open($port,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::ReadWrite)
+        $sw = New-Object System.IO.StreamWriter($fs)
+        $sw.WriteLine($line)
+        $sw.Flush()
+        $sw.Close()
+        $fs.Close()
     } catch {
-        # Best-effort: the progress port is absent until vioserial installs, and
-        # the console/transcript still capture $line. Never fail provisioning
-        # over a missing side-channel.
+        # Best-effort: the console/transcript still capture $line. Never fail
+        # provisioning over a missing side-channel.
         Write-Verbose "progress channel unavailable: $_"
     }
 }
 
+{{template "struct-json" .}}
+
 function Invoke-Step([string]$name, [scriptblock]$body) {
     Send-Progress "step: $name"
+    winkit-json @{ event = 'bootstrap_step'; stage = $name; status = 'start' }
     try {
         & $body
         Send-Progress "ok: $name"
+        winkit-json @{ event = 'bootstrap_step'; stage = $name; status = 'ok' }
     } catch {
         $script:failed += $name
         Send-Progress ("FAILED: {0} -- {1}" -f $name, $_.Exception.Message)
+        winkit-json @{ event = 'bootstrap_step'; stage = $name; status = 'fail'; error = $_.Exception.Message }
     }
 }
 
 Send-Progress "starting (answer volume: $vol)"
+winkit-json @{ event = 'bootstrap_start' }
 
 Invoke-Step 'use the high performance power scheme' {
     powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c | Out-Null
@@ -342,7 +345,7 @@ Invoke-Step 'install OpenSSH server' {
     if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
         # /LogPath writes to the answer volume, the only channel the host can
         # read without SSH.
-        DISM /Online /Add-Capability /CapabilityName:OpenSSH.Server~~~~0.0.1.0 /LogLevel:4 /LogPath:"$vol\dism.log" | Out-Null
+        DISM /Online /Add-Capability /CapabilityName:OpenSSH.Server~~~~0.0.1.0 /LogLevel:4 /LogPath:"$writeVol\dism.log" | Out-Null
         Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -ErrorAction SilentlyContinue | Out-Null
     }
 
@@ -415,8 +418,8 @@ Invoke-Step 'install WSL package' {
 }
 
 Invoke-Step 'import WSL1 distro' {
-    # Look for distro.wsl on any attached drive (the build attaches a FAT32
-    # qcow2 labelled UEFIBOOT carrying the tarball). Skip if not found.
+    # Look for distro.wsl on any attached drive (lives on the scratch FAT
+    # volume; the WSL service cannot import from a CD-ROM/ISO). Skip if not found.
     $wslFile = $null
     foreach ($d in (Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter })) {
         $candidate = "{0}:\distro.wsl" -f $d.DriveLetter
@@ -434,8 +437,35 @@ Invoke-Step 'import WSL1 distro' {
     $installDir = "C:\$distro"
     if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
     $env:WSL_UTF8 = '1'
+
+    # Do not rely on the WSL package's current default. Modern WSL defaults to
+    # version 2, while winkit's Windows images deliberately require WSL1 so
+    # they remain usable without VirtualMachinePlatform or a hypervisor.
+    $defaultOut = (& wsl.exe --set-default-version 1 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "wsl --set-default-version 1 exited $LASTEXITCODE -- $defaultOut" }
+
     $importOut = (& wsl.exe --import $distro $installDir $wslFile --version 1 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) { throw "wsl --import exited $LASTEXITCODE -- $importOut" }
+
+    # Enforce the requested version even if a future wsl.exe changes import
+    # defaults or ignores a trailing --version option. This is intentionally
+    # redundant with --import --version 1.
+    $convertOut = (& wsl.exe --set-version $distro 1 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "wsl --set-version $distro 1 exited $LASTEXITCODE -- $convertOut" }
+
+    # WSL generation is encoded by LXSS_DISTRO_FLAGS_VM_MODE (0x8). Modern
+    # WSL1 registrations can legitimately use registry Version=2 and an
+    # ext4.vhdx file: Version is the root-filesystem metadata schema, not the
+    # WSL generation. Refuse success only when the VM-mode bit proves WSL2.
+    $lxssRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+    $registration = Get-ChildItem -Path $lxssRoot -ErrorAction Stop |
+        ForEach-Object { Get-ItemProperty -Path $_.PSPath } |
+        Where-Object { $_.DistributionName -eq $distro } |
+        Select-Object -First 1
+    if (-not $registration) { throw "WSL registration for $distro was not found" }
+    if (([int]$registration.Flags -band 0x8) -ne 0) {
+        throw "WSL1 enforcement failed for ${distro}: VM_MODE is set in Flags=$($registration.Flags)"
+    }
     # wsl.exe writes benign warnings (e.g. a failed fstab pass) to stderr;
     # under ErrorActionPreference=Stop the 2>&1 redirect would promote the
     # first such line to a terminating error and fail the whole step even
@@ -444,12 +474,25 @@ Invoke-Step 'import WSL1 distro' {
     # Distro-agnostic liveness check: -lc so the login shell sources
     # /etc/profile. Recipe-specific verification (nix --version, os-release)
     # runs host-side after the build (wslVerifyDistro).
-    $bootOut = wsl.exe -d $distro -e /bin/sh -lc 'uname -a' 2>&1 | Select-Object -First 1
+    # Collect all output before extracting the first line: piping directly
+    # into Select-Object -First 1 closes the pipeline early, which makes
+    # wsl.exe exit with a broken-pipe error code (-1) even when uname
+    # succeeded.
+    $bootAll = (wsl.exe -d $distro -e /bin/sh -lc 'uname -a' 2>&1 | Out-String).Trim()
+    $bootExit = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
-    if ($LASTEXITCODE -ne 0) { throw "uname in $distro exited $LASTEXITCODE -- $bootOut" }
-    Send-Progress "$distro imported (WSL1): $bootOut"
+    $bootOut = ($bootAll -split "`n")[0].Trim()
+    if ($bootExit -ne 0) { throw "uname in $distro exited $bootExit -- $bootOut" }
+    $script:distroOk = $true
+    Send-Progress "$distro imported (WSL1 registry Flags=$($registration.Flags), VM_MODE clear): $bootOut"
 }
 
+if (-not $script:distroOk) {
+    Send-Progress 'skipping s6 and SFTP steps: WSL distro import failed'
+    winkit-json @{ event = 'bootstrap_step'; stage = 'start s6 service supervisor for WSL distro'; status = 'skipped'; error = 'distro import failed' }
+}
+
+if ($script:distroOk) {
 Invoke-Step 'start s6 service supervisor for WSL distro' {
     $distro = '{{.DistroName}}'
     # s6-svscan is the single entry point for all in-distro services (sshd,
@@ -459,12 +502,27 @@ Invoke-Step 'start s6 service supervisor for WSL distro' {
     # /bin/s6-init is the rootfs wrapper that sets PATH (nix profile) and the
     # ofd-shim LD_PRELOAD before exec'ing s6-svscan; s6-svscan itself lives in
     # the nix profile, not /bin, so it must be reached through the wrapper.
+{{- if .ServiceBinaryName}}
+    # winkit-service wraps wsl.exe as a proper Windows service (SCM restart)
+    # and pipes s6-svscan stdout/stderr to the structured virtio-serial port,
+    # so the host sees s6 lifecycle events in build.jsonl.
+    $svc = 'C:\{{.ServiceBinaryName}}'
+    Send-Progress "winkit-service binary: $svc (exists=$(Test-Path $svc))"
+    & $svc install --name winkit-s6 --user '.\{{.Username}}' --password '{{.Password}}' --log-serial '{{.StructPort}}' --log-file 'C:\winkit-s6.log' -- wsl.exe -d $distro -u root -e /bin/s6-init
+    if ($LASTEXITCODE -ne 0) { throw "winkit-service install exited $LASTEXITCODE" }
+    Send-Progress "winkit-s6 service installed"
+    & $svc start --name winkit-s6
+    if ($LASTEXITCODE -ne 0) { throw "winkit-service start exited $LASTEXITCODE" }
+    Start-Sleep -Seconds 2
+    $st = & $svc status --name winkit-s6 2>&1
+    Send-Progress "winkit-s6 status after start: $st"
+{{- else}}
     $action = New-ScheduledTaskAction -Execute 'wsl.exe' -Argument ("-d $distro -u root -e /bin/s6-init")
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $registered = $false
     foreach ($i in 1..3) {
         try {
-            Register-ScheduledTask -TaskName winkit-s6 -Action $action -Trigger $trigger -User SYSTEM -RunLevel Highest -Force | Out-Null
+            Register-ScheduledTask -TaskName winkit-s6 -Action $action -Trigger $trigger -User '.\{{.Username}}' -Password '{{.Password}}' -RunLevel Highest -Force | Out-Null
             $registered = $true; break
         } catch {
             Send-Progress "Register-ScheduledTask s6 attempt ${i}: $($_.Exception.Message)"
@@ -473,6 +531,7 @@ Invoke-Step 'start s6 service supervisor for WSL distro' {
     }
     if (-not $registered) { throw 'Register-ScheduledTask winkit-s6 failed after 3 attempts' }
     Start-ScheduledTask -TaskName winkit-s6
+{{- end}}
     Send-Progress "s6-svscan started for $distro (sshd on 127.0.0.1:2223)"
 }
 {{- if and .SFTPPort .RcloneViaS6}}
@@ -487,7 +546,25 @@ Invoke-Step 'verify s6-supervised SFTP mount' {
         if (Test-Path '{{.SFTPDrive}}:\' -ErrorAction SilentlyContinue) { $mounted = $true; break }
         Start-Sleep -Seconds 5
     }
-    if (-not $mounted) { throw 'SFTP share did not appear as {{.SFTPDrive}}: (is the host sftpshare server up? see C:\rclone-mount.log)' }
+    if (-not $mounted) {
+        Send-Progress "SFTP mount failed; dumping diagnostics"
+        # Check s6 supervisor state
+        try {
+            $s6stat = wsl.exe -d '{{.DistroName}}' -u root -e /bin/sh -lc 's6-svstat /etc/s6/services/rclone-mount 2>&1; echo "---"; s6-svstat /etc/s6/services/myagent 2>&1' 2>&1 | Out-String
+            Send-Progress "s6-svstat: $($s6stat.Trim())"
+        } catch { Send-Progress "s6-svstat failed: $($_.Exception.Message)" }
+        # Check winkit-s6 service status
+        try {
+            $svcSt = & 'C:\{{.ServiceBinaryName}}' status --name winkit-s6 2>&1 | Out-String
+            Send-Progress "winkit-s6 svc status: $($svcSt.Trim())"
+        } catch { Send-Progress "winkit-s6 status check failed: $($_.Exception.Message)" }
+        # Dump the service log
+        if (Test-Path 'C:\winkit-s6.log') {
+            $svcLog = Get-Content 'C:\winkit-s6.log' -Tail 30 -ErrorAction SilentlyContinue | Out-String
+            Send-Progress "winkit-s6.log tail: $($svcLog.Trim())"
+        } else { Send-Progress "C:\winkit-s6.log does not exist" }
+        throw 'SFTP share did not appear as {{.SFTPDrive}}: (is the host sftpshare server up?)'
+    }
 
     # Stable path for scripts regardless of the drive letter.
     if (-not (Test-Path 'C:\project')) {
@@ -499,6 +576,7 @@ Invoke-Step 'verify s6-supervised SFTP mount' {
     Send-Progress "mounted host SFTP share as {{.SFTPDrive}}: (DRIVE_FIXED, s6-supervised)"
 }
 {{- end}}
+}
 
 {{- if or .WallpaperName .WallpaperPath}}
 
@@ -543,8 +621,11 @@ Invoke-Step 'run guest diagnostics' {
 
 if ($script:failed.Count -gt 0) {
     Send-Progress ("done with {0} FAILED step(s): {1}" -f $script:failed.Count, ($script:failed -join ', '))
+    winkit-json @{ event = 'bootstrap_done'; status = 'partial'; failed = $script:failed }
 } else {
     Send-Progress 'done, all steps ok'
+    winkit-json @{ event = 'bootstrap_done'; status = 'ok' }
 }
+if ($structStream) { $structStream.Flush(); $structStream.Close() }
 try { Stop-Transcript } catch { Write-Warning "could not stop transcript: $_" }
 exit 0

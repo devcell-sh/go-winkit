@@ -36,6 +36,20 @@ func traceFileSize(path string) int64 {
 // isoPath containing the given files. Keys are absolute paths (e.g.
 // "/autounattend.xml"), values are file content.
 func CreateSimpleISO(isoPath string, files map[string][]byte) error {
+	return createISO(isoPath, files, false)
+}
+
+// CreateJolietISO creates an ISO 9660 image with Rock Ridge + Joliet
+// extensions. Windows reads Joliet natively (UCS-2 long filenames up to 64
+// chars), so this is the right format for media that must be readable by
+// both UEFI firmware and Windows Setup/WinPE. Joliet's extent-based sizing
+// has no cluster-boundary rounding, so files round-trip byte-exact without
+// the FAT padding/patch workaround CreateFATImagePadded needs.
+func CreateJolietISO(isoPath string, files map[string][]byte) error {
+	return createISO(isoPath, files, true)
+}
+
+func createISO(isoPath string, files map[string][]byte, joliet bool) error {
 	if len(files) == 0 {
 		return fmt.Errorf("no files to add to ISO")
 	}
@@ -71,7 +85,7 @@ func CreateSimpleISO(isoPath string, files map[string][]byte) error {
 	}
 
 	isoFS := fs.(*iso9660.FileSystem)
-	if err := isoFS.Finalize(iso9660.FinalizeOptions{RockRidge: true}); err != nil {
+	if err := isoFS.Finalize(iso9660.FinalizeOptions{RockRidge: true, Joliet: joliet}); err != nil {
 		return fmt.Errorf("finalizing ISO: %w", err)
 	}
 
@@ -514,16 +528,16 @@ func padToFATCluster(data []byte, clusterBytes int) []byte {
 
 // CreateFATImagePadded writes a FAT image whose `padded` files are each
 // extended to the volume's cluster boundary (dodging the go-diskfs boundary
-// size bug) while `exact` files are written byte-identical — driver payloads
+// size bug) while `exact` files are written byte-for-byte. Driver payloads
 // must match a catalog hash and cannot carry padding. The cluster size depends
 // on the final image size, which the padding itself grows, so it is resolved to
-// a fixed point before writing. CreateFATImage's round-trip verification still
-// guards every file, exact ones included.
+// a fixed point before writing.
+//
+// Exact files are padded to cluster boundary for the write (dodging go-diskfs)
+// and then the FAT directory entry is patched back to the original size. The
+// trailing bytes stay on disk but are invisible to any reader that trusts the
+// directory entry size (Code Integrity, msiexec, unzip, etc.).
 func CreateFATImagePadded(imgPath string, padded, exact map[string][]byte) error {
-	// Resolve cluster ↔ padded size to a fixed point. The table is monotonic
-	// and coarse (512 → 4K → 8K…), so this settles in one or two rounds; the
-	// cap is a backstop. The `total` here equals what CreateFATImage will sum
-	// from the same map, so the cluster it picks matches what we padded to.
 	cluster := int64(512)
 	var files map[string][]byte
 	for i := 0; i < 8; i++ {
@@ -535,8 +549,9 @@ func CreateFATImagePadded(imgPath string, padded, exact map[string][]byte) error
 			total += int64(len(pd))
 		}
 		for name, data := range exact {
-			files[name] = data
-			total += int64(len(data))
+			pd := padToFATCluster(data, int(cluster))
+			files[name] = pd
+			total += int64(len(pd))
 		}
 		if next := FATClusterBytes(total); next != cluster {
 			cluster = next
@@ -544,7 +559,107 @@ func CreateFATImagePadded(imgPath string, padded, exact map[string][]byte) error
 		}
 		break
 	}
-	return CreateFATImage(imgPath, files)
+	if err := CreateFATImage(imgPath, files); err != nil {
+		return err
+	}
+	// Patch exact files: go-diskfs wrote cluster-padded sizes into the
+	// directory entries. Overwrite each entry's size field with the
+	// original byte count so Code Integrity hashes match the catalog.
+	for name, want := range exact {
+		paddedSize := uint32(len(files[name]))
+		if err := patchFATFileSize(imgPath, name, paddedSize, uint32(len(want))); err != nil {
+			return fmt.Errorf("patching exact file size %s: %w", name, err)
+		}
+	}
+	// Verify exact files read back with the correct size and content.
+	for name, want := range exact {
+		got, err := ReadFileFromFAT(imgPath, name)
+		if err != nil {
+			return fmt.Errorf("verifying exact file %s: %w", name, err)
+		}
+		if !bytes.Equal(got, want) {
+			return fmt.Errorf("exact file %s: content mismatch (wrote %d bytes, read %d)",
+				name, len(want), len(got))
+		}
+	}
+	return nil
+}
+
+// patchFATFileSize opens a FAT image and overwrites the directory entry
+// size for the given file path. The 8.3 short name is derived from the
+// basename and searched in the raw directory sectors. FAT32 directory
+// entries are 32 bytes; the file size is a uint32 LE at offset 28.
+//
+// expectSize is the size go-diskfs wrote (the cluster-padded length); only
+// entries whose current size matches are considered. This prevents false
+// positives when file DATA happens to contain the 8.3 name pattern at a
+// 32-byte-aligned offset (confirmed: real PE drivers embed their .inf
+// filename in resource sections).
+func patchFATFileSize(imgPath, filePath string, expectSize, newSize uint32) error {
+	f, err := os.OpenFile(imgPath, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	sfn := toFAT83Name(filepath.Base(filePath))
+	if sfn == nil {
+		return fmt.Errorf("cannot derive 8.3 name for %s", filePath)
+	}
+
+	img, err := io.ReadAll(f)
+	if err != nil {
+		return err
+	}
+
+	patched := false
+	for off := 0; off+32 <= len(img); off += 32 {
+		if !bytes.Equal(img[off:off+11], sfn) {
+			continue
+		}
+		attr := img[off+11]
+		if attr&0x08 != 0 || attr&0x10 != 0 {
+			continue // skip volume labels and directories
+		}
+		curSize := binary.LittleEndian.Uint32(img[off+28 : off+32])
+		if curSize != expectSize {
+			continue // file data false positive, not a real directory entry
+		}
+		binary.LittleEndian.PutUint32(img[off+28:off+32], newSize)
+		patched = true
+		break
+	}
+	if !patched {
+		return fmt.Errorf("directory entry not found for 8.3 name %q (expected size %d)", string(sfn), expectSize)
+	}
+
+	if _, err := f.WriteAt(img, 0); err != nil {
+		return err
+	}
+	return nil
+}
+
+// toFAT83Name converts a filename like "vioser.inf" to the 11-byte
+// space-padded FAT short name "VIOSER  INF". Returns nil if the name
+// doesn't fit the 8.3 format.
+func toFAT83Name(name string) []byte {
+	name = strings.ToUpper(name)
+	parts := strings.SplitN(name, ".", 2)
+	base := parts[0]
+	ext := ""
+	if len(parts) > 1 {
+		ext = parts[1]
+	}
+	if len(base) > 8 || len(ext) > 3 {
+		return nil
+	}
+	var buf [11]byte
+	for i := range buf {
+		buf[i] = ' '
+	}
+	copy(buf[:8], base)
+	copy(buf[8:11], ext)
+	return buf[:]
 }
 
 // CreateFATImage creates a FAT32 disk image at imgPath containing the given

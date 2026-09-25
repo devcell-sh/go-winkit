@@ -46,6 +46,11 @@ type FileEntry struct {
 
 type WSLConfig struct {
 	Image string `yaml:"image"`
+	// NixHome selects the home-manager configuration for image: nix.
+	// A local directory (must contain a flake exposing
+	// homeConfigurations.<user>), a remote flake ref (github:org/repo,
+	// git+https://...), or empty for the embedded default.
+	NixHome string `yaml:"nixhome"`
 	// Services is a path to a directory of s6 service dirs (a standard
 	// s6 scan dir layout: <dir>/<name>/run), copied verbatim into
 	// /etc/s6/services of the distro. A subdir named like a built-in
@@ -211,9 +216,6 @@ func Parse(data []byte) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
-	if c.PE && c.WSL != nil {
-		return fmt.Errorf("pe and wsl are mutually exclusive: WinPE cannot run WSL")
-	}
 	if c.PE {
 		for phase := range c.Commands.Phases {
 			if phase != "boot" {

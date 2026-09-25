@@ -109,3 +109,23 @@ func Extract7z(isoPath, filePath string) ([]byte, error) {
 	base := filepath.Base(filePath)
 	return os.ReadFile(filepath.Join(tmpDir, base))
 }
+
+// Extract7zToFile extracts a single file from an ISO directly to destPath
+// on disk, avoiding loading the entire file into memory.
+func Extract7zToFile(isoPath, isoFilePath, destPath string) error {
+	tmpDir, err := os.MkdirTemp(filepath.Dir(destPath), "7z-extract-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cmd := exec.Command("7z", "e", "-o"+tmpDir, "-y", isoPath, isoFilePath)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("7z extract %s: %w", isoFilePath, err)
+	}
+
+	base := filepath.Base(isoFilePath)
+	return os.Rename(filepath.Join(tmpDir, base), destPath)
+}

@@ -62,15 +62,15 @@ func TestGenerateBootstrap_DisablesDisplayBlankingBeforeTheSlowSteps(t *testing.
 func TestGenerateBootstrapScript_ReportsFailuresToSerialAndTranscript(t *testing.T) {
 	// A silent failure costs a multi-hour run to notice. Every step must be
 	// individually guarded, failures must name the step and the error, and
-	// output must reach both channels the host can read: the virtio-serial port
-	// (guest-progress.log, live) and a transcript on the answer volume.
+	// output must reach both channels the host can read: the COM2 serial port
+	// (build.jsonl, live) and a transcript on the answer volume.
 	ps1 := string(GenerateBootstrapScript(DefaultConfig()))
 
 	assert.Contains(t, ps1, "Invoke-Step", "steps must run through the guarded wrapper")
 	assert.Contains(t, ps1, "FAILED", "failures must be labeled loudly")
 	assert.Contains(t, ps1, "$_.Exception.Message", "failures must carry the error message")
-	assert.Contains(t, ps1, `\\.\Global\`+winpe.ProgressPortName,
-		"progress must go to the virtio-serial port, not COM (PL011 has no COMx on ARM64)")
+	assert.Contains(t, ps1, winpe.GuestSerialPort,
+		"progress must go to the COM2 serial port")
 	assert.Contains(t, ps1, "Start-Transcript", "full output must be captured")
 	assert.Contains(t, ps1, BootstrapLogName, "transcript must land on the answer volume")
 }
@@ -133,47 +133,53 @@ func TestGenerateXML_WinPEAgentLauncher(t *testing.T) {
 	out := string(GenerateXML(cfg))
 
 	winPE := out[strings.Index(out, `pass="windowsPE"`):strings.Index(out, `pass="specialize"`)]
-	assert.Contains(t, winPE, winpe.AgentScriptName)
+	assert.Contains(t, winPE, winpe.AgentLauncherScript)
 	assert.Contains(t, winPE, "exit /b 0")
 
 	off := string(GenerateXML(DefaultConfig()))
-	assert.NotContains(t, off, winpe.AgentScriptName, "agent is opt-in")
+	assert.NotContains(t, off, winpe.AgentLauncherScript, "agent is opt-in")
 }
 
 func TestBuildAnswerVolume_ShipsWinPEAgent(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.WinPEAgent = true
-	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	agent, err := isokit.ReadFileFromFAT(imgPath, "/"+winpe.AgentScriptName)
-	require.NoError(t, err, "agent script must ship on the answer volume")
+	agent, err := isokit.ReadFileFromFAT(scratchPath, "/"+winpe.AgentScriptName)
+	require.NoError(t, err, "agent script must ship on the scratch volume")
 	assert.Contains(t, string(agent), winpe.AgentCommandFile)
 
-	_, err = isokit.ReadFileFromFAT(imgPath, "/"+winpe.AgentVolumeMarker)
+	_, err = isokit.ReadFileFromFAT(scratchPath, "/"+winpe.AgentVolumeMarker)
 	require.NoError(t, err, "marker must ship so the agent's fallback search works")
 }
 
 func TestBuildAnswerVolume_NoAgentByDefault(t *testing.T) {
-	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(DefaultConfig(), imgPath))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(DefaultConfig(), isoPath, scratchPath))
 
-	_, err := isokit.ReadFileFromFAT(imgPath, "/"+winpe.AgentScriptName)
+	_, err := isokit.ReadFileFromFAT(scratchPath, "/"+winpe.AgentScriptName)
 	require.Error(t, err, "no agent unless asked for")
 }
 
 func TestBuildAnswerVolume_ShipsBootstrapScript(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.SSHPubKey = "ssh-ed25519 AAAAtest test@devcell"
-	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	ps1, err := isokit.ReadFileFromFAT(imgPath, "/"+BootstrapScriptName)
-	require.NoError(t, err, "bootstrap script must be on the answer volume")
+	ps1, err := isokit.ReadFileFromISO(isoPath, "/"+BootstrapScriptName)
+	require.NoError(t, err, "bootstrap script must be on the ISO")
 	assert.Contains(t, string(ps1), "ssh-ed25519 AAAAtest test@devcell",
 		"the configured key must round-trip into the shipped script")
 
-	xml, err := isokit.ReadFileFromFAT(imgPath, "/autounattend.xml")
+	xml, err := isokit.ReadFileFromISO(isoPath, "/autounattend.xml")
 	require.NoError(t, err)
 	assert.Contains(t, string(xml), BootstrapScriptName,
 		"the XML must invoke the script that ships next to it")
@@ -273,15 +279,16 @@ func TestBuildAnswerVolume_ShipsOpenSSHPayload(t *testing.T) {
 	cfg.OpenSSHPayloadData = []byte("PK\x03\x04 fake zip")
 	cfg.OpenSSHPayloadSize = len(cfg.OpenSSHPayloadData)
 
-	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	got, err := isokit.ReadFileFromFAT(imgPath, "/"+OpenSSHPayloadName)
-	require.NoError(t, err, "the OpenSSH payload must ship on the answer volume")
-	// PadForFAT cluster-aligns every file, so the payload is a prefix of what
-	// comes back — the guest trims to OpenSSHPayloadSize before extracting.
-	assert.True(t, strings.HasPrefix(string(got), "PK\x03\x04 fake zip"),
-		"payload must be written verbatim (padding is expected, corruption is not)")
+	got, err := isokit.ReadFileFromISO(isoPath, "/"+OpenSSHPayloadName)
+	require.NoError(t, err, "the OpenSSH payload must ship on the ISO")
+	// ISO files are byte-exact (no cluster padding).
+	assert.Equal(t, cfg.OpenSSHPayloadData, got,
+		"payload must be written verbatim on the ISO")
 }
 
 // Provisioning runs over SSH, and an SSH session gets a UAC-filtered token even
@@ -313,9 +320,89 @@ func TestGenerateBootstrapScript_AllowsUnattendedElevation(t *testing.T) {
 		"disabling UAC entirely is a bigger hammer than this needs (mentioning it in a comment is fine)")
 }
 
+// The bootstrap emits structured JSONL events to the COM2 serial port
+// so the host can parse them in build.jsonl.
+func TestGenerateBootstrapScript_EmitsStructuredEvents(t *testing.T) {
+	ps1 := string(GenerateBootstrapScript(DefaultConfig()))
+
+	assert.Contains(t, ps1, winpe.GuestSerialPort,
+		"structured port must be opened for JSONL events")
+	assert.Contains(t, ps1, "winkit-json", "steps must emit structured events")
+	assert.Contains(t, ps1, `event = 'bootstrap_step'`, "each step must emit start/ok/fail events")
+	assert.Contains(t, ps1, `event = 'bootstrap_start'`, "bootstrap start must emit a structured event")
+	assert.Contains(t, ps1, `event = 'bootstrap_done'`, "bootstrap done must emit a structured event")
+}
+
+// When the WSL distro import fails, the bootstrap must skip s6 and SFTP
+// verify steps: running them on a broken distro wastes minutes and produces
+// confusing errors.
+func TestGenerateBootstrapScript_SkipsS6WhenDistroImportFails(t *testing.T) {
+	cfg := sftpConfig()
+	cfg.RcloneViaS6 = true
+	ps1 := string(GenerateBootstrapScript(cfg))
+
+	assert.Contains(t, ps1, "$script:distroOk", "distro import gate flag must exist")
+	assert.Contains(t, ps1, "skipping s6 and SFTP steps",
+		"bootstrap must log when s6 steps are skipped due to distro failure")
+
+	distroOkSet := strings.Index(ps1, "$script:distroOk = $true")
+	s6Start := strings.Index(ps1, "if ($script:distroOk)")
+	require.NotEqual(t, -1, distroOkSet, "distroOk must be set on success")
+	require.NotEqual(t, -1, s6Start, "s6 step must be gated on distroOk")
+	assert.Less(t, distroOkSet, s6Start,
+		"distroOk must be set before the s6 gate checks it")
+}
+
+func TestGenerateBootstrapScript_EnforcesWSL1Registration(t *testing.T) {
+	ps1 := string(GenerateBootstrapScript(DefaultConfig()))
+
+	setDefault := strings.Index(ps1, "wsl.exe --set-default-version 1")
+	importV1 := strings.Index(ps1, "wsl.exe --import $distro $installDir $wslFile --version 1")
+	setVersion := strings.Index(ps1, "wsl.exe --set-version $distro 1")
+	registryCheck := strings.Index(ps1, "[int]$registration.Flags -band 0x8")
+	distroOK := strings.Index(ps1, "$script:distroOk = $true")
+
+	require.NotEqual(t, -1, setDefault)
+	require.NotEqual(t, -1, importV1)
+	require.NotEqual(t, -1, setVersion)
+	require.NotEqual(t, -1, registryCheck)
+	require.NotEqual(t, -1, distroOK)
+	assert.Less(t, setDefault, importV1, "default must be pinned before import")
+	assert.Less(t, importV1, setVersion, "explicit conversion guard follows import")
+	assert.Less(t, setVersion, registryCheck, "registry must verify the enforced version")
+	assert.Less(t, registryCheck, distroOK, "WSL2 must never set distroOk")
+	assert.NotContains(t, ps1, "unexpected VhdFileName",
+		"modern WSL1 may use a VHD-backed root filesystem")
+}
+
+// When winkit-service.exe is shipped, the s6 supervisor must be registered
+// as a Windows service with --log-serial, not as a scheduled task.
+func TestGenerateBootstrapScript_S6ViaWinkitService(t *testing.T) {
+	cfg := sftpConfig()
+	cfg.RcloneViaS6 = true
+	cfg.ServiceBinaryName = "winkit-service.exe"
+	ps1 := string(GenerateBootstrapScript(cfg))
+
+	assert.Contains(t, ps1, "winkit-service.exe", "winkit-service must be referenced")
+	assert.Contains(t, ps1, "--log-serial", "s6 stdout must pipe to the serial port")
+	assert.Contains(t, ps1, "--name winkit-s6", "the service must be named winkit-s6")
+	assert.NotContains(t, ps1, "Register-ScheduledTask -TaskName winkit-s6",
+		"scheduled task path must not be used when winkit-service is available")
+}
+
+// Without winkit-service.exe, the s6 supervisor falls back to the scheduled task.
+func TestGenerateBootstrapScript_S6FallbackToScheduledTask(t *testing.T) {
+	cfg := sftpConfig()
+	cfg.RcloneViaS6 = true
+	ps1 := string(GenerateBootstrapScript(cfg))
+
+	assert.Contains(t, ps1, "Register-ScheduledTask -TaskName winkit-s6",
+		"without winkit-service, s6 must use a scheduled task")
+}
+
 // The "check network connectivity" step must do more than existence checks: it
 // must produce enough output to diagnose a broken network from the host without
-// SSH — i.e., from guest-progress.log and the bootstrap transcript alone. Every
+// SSH — i.e., from build.jsonl and the bootstrap transcript alone. Every
 // piece of data we've ever needed to diagnose a network failure must appear.
 func TestGenerateBootstrapScript_NetworkCheckIsComprehensive(t *testing.T) {
 	ps1 := string(GenerateBootstrapScript(DefaultConfig()))

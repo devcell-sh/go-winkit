@@ -21,8 +21,8 @@ func TestParseArgs(t *testing.T) {
 		structPort string
 	}{
 		{"none", nil, gosshd.DefaultAddr, "cmd", 0, "", ""},
-		{"winpe positionals", []string{`C:\gosshd.log`, `\\.\Global\winkit.structured.0`},
-			gosshd.DefaultAddr, "cmd", 0, `C:\gosshd.log`, `\\.\Global\winkit.structured.0`},
+		{"winpe positionals", []string{`C:\gosshd.log`, `\\.\COM2`},
+			gosshd.DefaultAddr, "cmd", 0, `C:\gosshd.log`, `\\.\COM2`},
 		{"addr only", []string{"-addr", ":2222"}, ":2222", "cmd", 0, "", ""},
 		{"wsl provisioning: addr+shell then log", []string{"-addr", ":2222", "-shell", "powershell", `C:\gosshd.log`},
 			":2222", "powershell", 0, `C:\gosshd.log`, ""},

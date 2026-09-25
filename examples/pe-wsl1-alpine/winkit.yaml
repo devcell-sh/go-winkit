@@ -1,0 +1,12 @@
+# Standard WinPE + WSL1 build. The winkit library owns component transfer,
+# packaged WSL runtime assembly, PowerShell provisioning, artifact metadata,
+# and Alpine import. See README.md for the normal build/start/verify flow.
+#
+# Build:  winkit build      (minutes: PE boot volume + writable data disk)
+# Boot:   winkit start      (SSH: ssh -p 20022 admin@127.0.0.1)
+# Verify: wsl -d winkit --exec /bin/cat /etc/alpine-release
+
+from: windows/11-pro-arm64
+pe: true
+wsl:
+  image: alpine

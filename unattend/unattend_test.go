@@ -219,22 +219,20 @@ func TestBuildAnswerVolume_ShipsAnswerDrivers(t *testing.T) {
 		"/drivers/vioscsi/vioscsi.inf": []byte("[Version]\r\nSignature=\"$WINDOWS NT$\"\r\n"),
 		"/drivers/vioscsi/vioscsi.sys": {0x4D, 0x5A, 0x90, 0x00},
 	}
-	dest := filepath.Join(t.TempDir(), "answer.img")
-	require.NoError(t, BuildAnswerVolume(cfg, dest))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	// Drivers are cluster-padded (not byte-exact): they're only consumed
-	// by WinPE's drvload which doesn't verify Authenticode; the installed-
-	// OS copy comes from the virtio-win CD via pnputil in specialize.
-	inf, err := isokit.ReadFileFromFAT(dest, "/drivers/vioscsi/vioscsi.inf")
+	// Drivers are now on the ISO (byte-exact, no cluster padding).
+	inf, err := isokit.ReadFileFromISO(isoPath, "/drivers/vioscsi/vioscsi.inf")
 	require.NoError(t, err)
 	want := cfg.AnswerDrivers["/drivers/vioscsi/vioscsi.inf"]
-	assert.True(t, len(inf) >= len(want), "read-back must be at least original size")
-	assert.Equal(t, want, inf[:len(want)], "INF prefix must match original content")
-	sys, err := isokit.ReadFileFromFAT(dest, "/drivers/vioscsi/vioscsi.sys")
+	assert.Equal(t, want, inf, "INF content must match original")
+	sys, err := isokit.ReadFileFromISO(isoPath, "/drivers/vioscsi/vioscsi.sys")
 	require.NoError(t, err)
 	wantSys := cfg.AnswerDrivers["/drivers/vioscsi/vioscsi.sys"]
-	assert.True(t, len(sys) >= len(wantSys), "read-back must be at least original size")
-	assert.Equal(t, wantSys, sys[:len(wantSys)], "driver binary prefix must match original content")
+	assert.Equal(t, wantSys, sys, "driver binary content must match original")
 }
 
 // The agent can execute one pre-baked command and write its output to
@@ -244,10 +242,12 @@ func TestBuildAnswerVolume_ShipsAgentCommand(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.WinPEAgent = true
 	cfg.AgentCommand = `& drvload.exe "$WinkitVol\$WinPEDriver$\vioscsi\vioscsi.inf"; Write-Output "DRVLOAD_RC=$LASTEXITCODE"`
-	dest := filepath.Join(t.TempDir(), "answer.img")
-	require.NoError(t, BuildAnswerVolume(cfg, dest))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	cmdFile, err := isokit.ReadFileFromFAT(dest, "/"+winpe.AgentCommandFile)
+	cmdFile, err := isokit.ReadFileFromFAT(scratchPath, "/"+winpe.AgentCommandFile)
 	require.NoError(t, err)
 	firstLine, _, _ := strings.Cut(string(cmdFile), "\n")
 	assert.Equal(t, cfg.AgentCommand, strings.TrimRight(firstLine, "\r "),
@@ -257,9 +257,11 @@ func TestBuildAnswerVolume_ShipsAgentCommand(t *testing.T) {
 func TestBuildAnswerVolume_NoAgentCommandFileWithoutCommand(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.WinPEAgent = true
-	dest := filepath.Join(t.TempDir(), "answer.img")
-	require.NoError(t, BuildAnswerVolume(cfg, dest))
-	_, err := isokit.ReadFileFromFAT(dest, "/"+winpe.AgentCommandFile)
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
+	_, err := isokit.ReadFileFromFAT(scratchPath, "/"+winpe.AgentCommandFile)
 	assert.Error(t, err, "no command file unless a command was configured")
 }
 
@@ -1003,22 +1005,27 @@ func TestBuildAnswerVolume_EmbedsEFIBootloader(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EFIBootLoader = peARM64BootloaderStub()
 
-	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	got, err := isokit.ReadFileFromFAT(imgPath, "/EFI/BOOT/BOOTAA64.EFI")
-	require.NoError(t, err, "BOOTAA64.EFI must be on the answer volume")
-	assert.True(t, bytes.HasPrefix(got, []byte("MZ")), "must start with MZ PE header")
+	got, err := isokit.ReadFileFromISO(isoPath, "/EFI/BOOT/BOOTAA64.EFI")
+	require.NoError(t, err, "BOOTAA64.EFI must be on the ISO")
+	// ISO files are byte-exact; verify the full content.
+	assert.Equal(t, cfg.EFIBootLoader, got, "bootloader must round-trip intact on the ISO")
 }
 
 func TestBuildAnswerVolume_NoBootloaderWhenNotSet(t *testing.T) {
 	cfg := DefaultConfig()
 
-	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
+	td := t.TempDir()
+	isoPath := filepath.Join(td, "autounattend.iso")
+	scratchPath := filepath.Join(td, "winkit-scratch.img")
+	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	_, err := isokit.ReadFileFromFAT(imgPath, "/EFI/BOOT/BOOTAA64.EFI")
-	assert.Error(t, err, "BOOTAA64.EFI should not be on the volume when EFIBootLoader is empty")
+	_, err := isokit.ReadFileFromISO(isoPath, "/EFI/BOOT/BOOTAA64.EFI")
+	assert.Error(t, err, "BOOTAA64.EFI should not be on the ISO when EFIBootLoader is empty")
 }
 
 // peARM64BootloaderStub returns a minimal PE binary with aarch64 machine type,
@@ -1147,4 +1154,20 @@ func TestDISMFeatures_Deduplication(t *testing.T) {
 	}
 	assert.Equal(t, 1, wslCount, "WSL1 should not be duplicated")
 	assert.Contains(t, features, "Containers")
+}
+
+// When ServiceBinaryName is set, specialize must include a RunSynchronousCommand
+// that copies the binary from the answer volume to C:\.
+func TestGenerateXML_ServiceBinaryCopyInSpecialize(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ServiceBinaryName = "winkit-service.exe"
+	out := string(GenerateXML(cfg))
+
+	assert.Contains(t, out, `winkit-service.exe`)
+	assert.Contains(t, out, "Copy winkit-service wrapper")
+
+	// Without ServiceBinaryName, the copy command must not appear.
+	cfg2 := DefaultConfig()
+	out2 := string(GenerateXML(cfg2))
+	assert.NotContains(t, out2, "winkit-service wrapper")
 }

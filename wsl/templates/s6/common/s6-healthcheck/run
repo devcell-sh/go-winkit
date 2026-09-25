@@ -1,0 +1,40 @@
+#!/bin/sh
+# Polls s6 service status and the W: drive mount, emitting JSONL to stdout.
+# stdout is inherited from s6-svscan, which winkit-service pipes to the
+# virtio-serial structured log port: the host reads these events in
+# build.jsonl via ParseGuestEvents.
+SCANDIR=/etc/s6/services
+INTERVAL=30
+
+while true; do
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  svcs=""
+  for svc in "$SCANDIR"/*/; do
+    name=$(basename "$svc")
+    [ "$name" = "s6-healthcheck" ] && continue
+    state="unknown"
+    if command -v s6-svstat >/dev/null 2>&1; then
+      info=$(s6-svstat "$svc" 2>/dev/null)
+      case "$info" in
+        *" up "*) state="up" ;;
+        *" down "*) state="down" ;;
+      esac
+    fi
+    if [ -n "$svcs" ]; then svcs="$svcs,"; fi
+    svcs="$svcs\"$name\":\"$state\""
+  done
+
+  # W: drive check via interop: ls the drive root through drvfs.
+  wmount="false"
+  if [ -d /mnt/w ] && ls /mnt/w/ >/dev/null 2>&1; then
+    wmount="true"
+  elif /mnt/c/Windows/system32/cmd.exe /c "dir W:\\" >/dev/null 2>&1; then
+    wmount="true"
+  fi
+
+  printf '{"ts":"%s","event":"s6_health","services":{%s},"w_mounted":%s}\n' \
+    "$ts" "$svcs" "$wmount"
+
+  sleep "$INTERVAL"
+done

@@ -23,8 +23,8 @@ func newDiagCmd() *cobra.Command {
 
 func newDiagGuestCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "guest <answer.img>",
-		Short: "Read the guest's diagnostic report off the answer volume image",
+		Use:   "guest <scratch.img>",
+		Short: "Read the guest's diagnostic report off the scratch FAT volume",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			report, err := unattend.ReadGuestDiagnostics(args[0])

@@ -27,6 +27,10 @@ type InstallOptions struct {
 // RunOptions holds QEMU-specific options for StartRun. Pass as
 // VMRunConfig.BackendExtra.
 type RunOptions struct {
+	// BootVolume is an optional standalone FAT qcow2 WinPE boot volume. When
+	// set, DiskPath remains the writable NVMe disk and QEMU boots this USB
+	// volume via BuildQcowBootArgv.
+	BootVolume        string
 	FirmwarePath      string
 	VarsPath          string
 	Secure            bool
@@ -79,7 +83,8 @@ func (b *Backend) StartInstall(ctx context.Context, cfg vm.VMInstallConfig) (vm.
 	qcfg := InstallConfig{
 		WindowsISO:      cfg.WindowsISO,
 		VirtIOISO:       cfg.VirtIOISO,
-		AnswerVolume:    cfg.AnswerVolume,
+		AnswerISO:       cfg.AnswerISO,
+		ScratchVolume:   cfg.ScratchVolume,
 		DiskPath:        cfg.DiskPath,
 		DiskSizeGB:      cfg.DiskSizeGB,
 		CPUs:            cfg.CPUs,
@@ -127,6 +132,7 @@ func (b *Backend) StartRun(ctx context.Context, cfg vm.VMRunConfig) (vm.VM, erro
 		SMBIOSSerial:    cfg.SMBIOSSerial,
 	}
 	if opts, ok := cfg.BackendExtra.(*RunOptions); ok && opts != nil {
+		qcfg.BootVolume = opts.BootVolume
 		qcfg.FirmwarePath = opts.FirmwarePath
 		qcfg.VarsPath = opts.VarsPath
 		qcfg.Secure = opts.Secure

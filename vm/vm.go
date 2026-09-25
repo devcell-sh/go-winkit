@@ -63,9 +63,10 @@ type VM interface {
 // install VM. Backend-specific options (QEMU's BootVolume, Secure, CDBus, etc.)
 // are passed via BackendExtra: each backend type-asserts to its own options type.
 type VMInstallConfig struct {
-	WindowsISO   string
-	VirtIOISO    string
-	AnswerVolume string
+	WindowsISO    string
+	VirtIOISO     string
+	AnswerISO     string
+	ScratchVolume string
 
 	DiskPath   string
 	DiskSizeGB int

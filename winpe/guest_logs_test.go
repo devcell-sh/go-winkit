@@ -54,6 +54,8 @@ func TestGuestLogNames_CoverWinPEAndFirstLogonChannels(t *testing.T) {
 	require.ElementsMatch(t, []string{
 		SetupActSnapshotName,
 		SetupErrSnapshotName,
+		SetupActTargetSnapshotName,
+		SetupErrTargetSnapshotName,
 		AgentResultFile,
 		BootstrapLogName,
 		GuestDiagnosticsLogName,

@@ -1,0 +1,14 @@
+# Smallest WinPE build: a ~4GB ephemeral boot volume, no full Windows
+# install, no WSL. PE mode changes the execution model:
+#
+#   features:  baked into the WIM offline (DISM), not applied over SSH
+#   files:     injected into the WIM at build time
+#   commands:  boot phase only — run over gosshd once WinPE is up
+#
+# Build:  winkit build      (minutes, not hours — no VM install)
+
+from: windows/11-pro-arm64
+pe: true
+
+commands:
+  - powershell -NoProfile -Command "Get-ComputerInfo -Property OsName | Out-String | Write-Host"

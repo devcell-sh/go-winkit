@@ -1,56 +1,51 @@
 $ErrorActionPreference = 'Continue'
 
+$agentLog = $null
+function agent-log([string]$msg) {
+    $line = "$(Get-Date -Format o) agent: $msg"
+    if ($agentLog) { $line | Out-File -Append $agentLog -Encoding utf8 }
+}
+
 $WinkitVol = if ($args.Count -gt 0) { $args[0] } else { $null }
 
 # Find the winkit volume by marker file.
+$probed = @()
 while (-not $WinkitVol) {
     foreach ($d in 'C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','Y','Z') {
         if (Test-Path "${d}:\{{.VolumeMarker}}") { $WinkitVol = "${d}:"; break }
+        $probed += $d
     }
     if (-not $WinkitVol) { Start-Sleep -Seconds {{.PollSeconds}} }
 }
-{{- if .ProgressPort}}
-"winkit: agent-volume $WinkitVol" | Out-File -Append '{{.ProgressPort}}' -Encoding utf8
-{{- end}}
+$agentLog = "$WinkitVol\winkit-agent-diag.log"
+agent-log "started, volume=$WinkitVol (probed: $($probed -join ','))"
+agent-log "env: OS=$($env:OS) PROCESSOR_ARCHITECTURE=$($env:PROCESSOR_ARCHITECTURE) SystemRoot=$($env:SystemRoot)"
+agent-log "files on volume: $(Get-ChildItem $WinkitVol -Name -ErrorAction SilentlyContinue | Select-Object -First 20 | Out-String)"
+{{- if .SerialPort}}
 
-{{- if .ProgressPort}}
-
-# Open the virtio-serial progress port for streaming.
-$progressStream = $null
-try {
-    $progressStream = [System.IO.File]::Open('{{.ProgressPort}}',
-        [System.IO.FileMode]::Open,
-        [System.IO.FileAccess]::Write,
-        [System.IO.FileShare]::ReadWrite)
-} catch { }
-{{- end}}
-
-function winkit-progress([string]$msg) {
-{{- if .ProgressPort}}
-    if ($progressStream) {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes("winkit: $msg`n")
-        $progressStream.Write($bytes, 0, $bytes.Length)
-        $progressStream.Flush()
-    }
-{{- end}}
-}
-{{- if .StructuredPort}}
-
-# Structured JSON tee to the host (lands in build.jsonl). Opened lazily and
-# retried every poll: the vioserial driver is drvloaded after this agent
-# starts, so the port device does not exist yet on the first attempts.
-$script:structStream = $null
-function winkit-struct-open {
-    if ($script:structStream) { return $true }
+# Unified serial port (COM2 pci-serial, backed by build.jsonl on the host).
+# Opened lazily and retried every poll: the PCI serial device may not be
+# enumerated immediately after boot.
+$script:serialStream = $null
+function winkit-serial-open {
+    if ($script:serialStream) { return $true }
     try {
-        $script:structStream = [System.IO.File]::Open('{{.StructuredPort}}',
+        $script:serialStream = [System.IO.File]::Open('{{.SerialPort}}',
             [System.IO.FileMode]::Open,
             [System.IO.FileAccess]::Write,
             [System.IO.FileShare]::ReadWrite)
-        winkit-progress 'structured port open'
         return $true
     } catch { return $false }
 }
+
+function winkit-progress([string]$msg) {
+    if (-not (winkit-serial-open)) { return }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes("winkit: $msg`n")
+    $script:serialStream.Write($bytes, 0, $bytes.Length)
+    $script:serialStream.Flush()
+}
+
+winkit-progress "agent-volume $WinkitVol"
 
 # Incremental tail of a Setup log: re-read the whole file (RAM disk, cheap),
 # emit only lines past the per-path cursor as flat GuestEvent JSON. The
@@ -60,7 +55,7 @@ function winkit-struct-open {
 # it, so it is re-examined complete on the next poll.
 $script:logCursor = @{}
 function winkit-tee-log([string]$path, [string]$eventName) {
-    if (-not (winkit-struct-open)) { return }
+    if (-not (winkit-serial-open)) { return }
     if (-not (Test-Path $path -ErrorAction SilentlyContinue)) { return }
     $text = $null
     try {
@@ -86,13 +81,16 @@ function winkit-tee-log([string]$path, [string]$eventName) {
             src   = $path
         } | ConvertTo-Json -Compress
         $bytes = [System.Text.Encoding]::UTF8.GetBytes("$json`n")
-        $script:structStream.Write($bytes, 0, $bytes.Length)
+        $script:serialStream.Write($bytes, 0, $bytes.Length)
     }
     if ($lines.Count - 1 -gt $seen) {
         $script:logCursor[$path] = $lines.Count - 1
-        $script:structStream.Flush()
+        $script:serialStream.Flush()
     }
 }
+{{- else}}
+
+function winkit-progress([string]$msg) { }
 {{- end}}
 
 # Poll loop.
@@ -107,7 +105,7 @@ while ($true) {
     # PnP's driver-binding trace. drvload.exe has no verbose switch, so this
     # is the only record of which INF matched which device and why.
     Copy-Item 'X:\Windows\INF\setupapi.dev.log' "$WinkitVol\{{.SetupAPISnapshot}}" -Force -ErrorAction SilentlyContinue
-{{- if .StructuredPort}}
+{{- if .SerialPort}}
 
     # Live tee of Setup's logs to the host build.jsonl — the snapshots above
     # are only readable after QEMU exits; this is the during-install view.
@@ -124,18 +122,10 @@ while ($true) {
         Remove-Item $cmdFile -Force
         $resultFile = "$WinkitVol\{{.ResultFile}}"
         try {
-{{- if .ProgressPort}}
             Invoke-Expression $winkitCmd 2>&1 | Tee-Object -FilePath $resultFile | ForEach-Object {
-                if ($progressStream) {
-                    $bytes = [System.Text.Encoding]::UTF8.GetBytes("$_`n")
-                    $progressStream.Write($bytes, 0, $bytes.Length)
-                    $progressStream.Flush()
-                }
+                winkit-progress "$_"
                 $_
             }
-{{- else}}
-            Invoke-Expression $winkitCmd 2>&1 | Set-Content $resultFile -Encoding UTF8
-{{- end}}
         } catch {
             # Stream it first: the result file is only readable once QEMU
             # exits, so an error that lands there alone looks like a hang.

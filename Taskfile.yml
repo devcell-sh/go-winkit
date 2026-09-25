@@ -6,17 +6,13 @@ tasks:
     dir: "{{.TASKFILE_DIR}}"
     silent: true
     vars:
-      # wimlib is compiled in by default wherever CGO is on (darwin):
-      # fetch/build subcommands need libwim, and a binary without it only
-      # discovers that after a multi-GB download. Override with
-      # WINKIT_BUILD_TAGS to change.
-      #
-      # Linking is dynamic by default (system libwim via pkg-config: brew
-      # install wimlib). WINKIT_LINK=static links the vendored libwim.a
-      # instead — self-contained, but the .a must exist for this platform
-      # (build it with `task static-lib` in the go-wimlib repo).
+      # wimlib links automatically when CGO is on (darwin). Linking is
+      # dynamic by default (system libwim via pkg-config: brew install
+      # wimlib). WINKIT_LINK=static links the vendored libwim.a instead,
+      # which requires the .a for this platform (build it with
+      # `task static-lib` in the go-wimlib repo).
       LINK: '{{.WINKIT_LINK | default "dynamic"}}'
-      DEFAULT_TAGS: '{{if eq OS "darwin"}}wimlib{{if eq .LINK "static"}} wimlib_static{{end}}{{end}}'
+      DEFAULT_TAGS: '{{if eq .LINK "static"}}wimlib_static{{end}}'
       TAGS: '{{.WINKIT_BUILD_TAGS | default .DEFAULT_TAGS}}'
     cmds:
       - mkdir -p bin
@@ -62,7 +58,7 @@ tasks:
 
       Override the location with WINKIT_CACHE_DIR.
     cmds:
-      - go run -tags wimlib ./cmd/winkit fetch
+      - go run ./cmd/winkit fetch
       - go run ./cmd/winkit fetch virtio
 
   test:seed:where:
@@ -77,7 +73,33 @@ tasks:
   test:integration:
     desc: "Boot WinPE in QEMU end to end (needs: task test:seed)"
     cmds:
-      - go test -tags 'wimlib integration' -run TestWimBuilder/tcg -timeout 40m -v ./winpe/qemu/
+      - go test -tags integration -run TestWimBuilder/tcg -timeout 40m -v ./winpe/qemu/
+
+  test:examples:
+    desc: "Build the examples/ configs for real (needs: task test:seed)"
+    summary: |
+      Runs the example e2e tests: pe-minimal builds a PE volume through
+      winkit.Build in minutes and always runs; wsl-alpine is the full
+      multi-hour install + boot + guest verification and only runs with
+      WINKIT_E2E=1 in the environment.
+    cmds:
+      - go test -run 'TestExamplePEMinimal|TestExampleFullWSL1Alpine' -timeout 6h -v ./test/e2e/
+
+  test:examples:full-wsl1-alpine:
+    desc: "Full unattended Windows 11 install with WSL1 Alpine, pe-agent second-pass verification"
+    summary: |
+      Runs TestExampleFullWSL1Alpine_E2E: builds the wsl-alpine example end to
+      end (install.wim patched with pe-agent via SetupExecute), installs
+      Windows, imports the Alpine distro, verifies the myagent s6 service and
+      htop hook, then boots the image and checks the pe-agent second-pass log.
+
+      Env: WINKIT_E2E_TEARDOWN=false (keep VM up), WINKIT_E2E_ACCEL.
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      WINKIT_E2E: "1"
+    cmds:
+      - mkdir -p .scratch/debug
+      - set -o pipefail; go test -run TestExampleFullWSL1Alpine_E2E -v -timeout 5h ./test/e2e/ 2>&1 | tee .scratch/debug/test-full-wsl1-alpine.log
 
   test:data:promote:
     desc: Copy the newest test/results WSL disk (wsl.qcow2) into test/testdata
@@ -123,7 +145,7 @@ tasks:
     dir: "{{.TASKFILE_DIR}}"
     vars:
       LINK: '{{.WINKIT_LINK | default "dynamic"}}'
-      TAGS: 'integration wimlib{{if eq .LINK "static"}} wimlib_static{{end}}'
+      TAGS: 'integration{{if eq .LINK "static"}} wimlib_static{{end}}'
     env:
       WINKIT_E2E: "1"
     cmds:
@@ -134,6 +156,30 @@ tasks:
       - mkdir -p .scratch/debug
       - set -o pipefail; CGO_ENABLED=1 go test -tags '{{.TAGS}}' -run TestQcowBuilderWSL -v -timeout 5h ./build/ 2>&1 | tee .scratch/debug/test-wsl.log
 
+  test:examples:pe-wsl1-alpine:
+    desc: "Build the standard PE+WSL1 Alpine example, boot it, and verify it over SSH"
+    summary: |
+      Runs TestExamplePEWSL1Alpine_E2E through the public product path:
+      `winkit build --file examples/pe-wsl1-alpine`, artifact manifest loading,
+      `winkit.Start`, PowerShell-owned guest provisioning, and the ordinary
+      SSH-facing `wsl` command. It asserts that the distro is WSL version 1 and
+      that Alpine reports its release and ARM64 architecture.
+
+      Debug mode: WINKIT_E2E_TEARDOWN=false keeps the VM running after the
+      test completes so you can SSH in manually:
+        ssh -p 22122 -o StrictHostKeyChecking=no admin@127.0.0.1
+      Password: admin.
+
+      Env: WINKIT_E2E_TEARDOWN=false (keep VM up), WINKIT_E2E_ACCEL.
+    dir: "{{.TASKFILE_DIR}}"
+    vars:
+      LINK: '{{.WINKIT_LINK | default "dynamic"}}'
+      TAGS: 'integration{{if eq .LINK "static"}} wimlib_static{{end}}'
+    env:
+      WINKIT_E2E: "1"
+    cmds:
+      - mkdir -p .scratch/debug
+      - set -o pipefail; CGO_ENABLED=1 go test -tags '{{.TAGS}}' -run TestExamplePEWSL1Alpine_E2E -v -timeout 2h ./test/e2e/ 2>&1 | tee .scratch/debug/test-pe-wsl1.log
 
   sftp:get:
     desc: "Fetch rclone for the host (darwin) + guest tools (rclone win-arm64, WinFsp MSI) into the cache (CELL-532)"
@@ -190,7 +236,7 @@ tasks:
       # Virtualization.framework, CELL-523/531), so this task now fails fast
       # with that error. Kept for the day Apple ships ACPI/vTPM support; for
       # vz experiments with Linux media use debug:vz:bootprobe.
-      TAGS: 'integration wimlib darwin_vz{{if eq .LINK "static"}} wimlib_static{{end}}'
+      TAGS: 'integration darwin_vz{{if eq .LINK "static"}} wimlib_static{{end}}'
     env:
       WINKIT_E2E: "1"
       WINKIT_VM_BACKEND: vz
@@ -320,8 +366,38 @@ tasks:
       - rm -rf .rendered-ps1
 
   clean:results:
-    desc: Remove all large build artifacts under test/results
-    deps: [clean:results:qcow2, clean:results:wim, clean:results:iso, clean:results:img, clean:results:wsl]
+    desc: Remove all large build artifacts under test/results and work/pe-base
+    cmds:
+      - task: clean:results:qcow2
+      - task: clean:pe-base
+      - task: clean:results:wim
+      - task: clean:results:iso
+      - task: clean:results:img
+      - task: clean:results:wsl
+
+  clean:pe-base:
+    desc: Remove all work/pe-base directories under test/results
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        set -e
+        DIR="{{.TASKFILE_DIR}}/test/results"
+        if [ ! -d "$DIR" ]; then
+          echo "no $DIR — nothing to clean"
+          exit 0
+        fi
+        DIRS=$(find "$DIR" -type d -path '*/work/pe-base' 2>/dev/null)
+        if [ -z "$DIRS" ]; then
+          echo "no work/pe-base dirs found under $DIR"
+          exit 0
+        fi
+        COUNT=$(echo "$DIRS" | wc -l | tr -d ' ')
+        echo "$DIRS" | while read -r d; do
+          rm -rf "$d"/*
+          echo "cleaned $d"
+        done
+        echo "cleaned $COUNT work/pe-base dir(s)"
 
   clean:results:qcow2:
     desc: Remove all *.qcow2 files under test/results (recursive; that tree only)

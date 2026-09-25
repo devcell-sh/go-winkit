@@ -4,6 +4,7 @@ import (
 	_ "embed"
 
 	"github.com/devcell-sh/go-winkit/internal/templates"
+	"github.com/devcell-sh/go-winkit/winpe"
 )
 
 // First-logon bootstrap.
@@ -16,11 +17,13 @@ import (
 // each cost a multi-hour run to notice.
 //
 // Failure reporting goes to two host-readable channels:
-//   - the virtio-serial progress port (lands in
-//     Spec.GuestProgressLogPath on the host, live)
+//   - the COM2 serial port (lands in build.jsonl on the host, live)
 //   - a Start-Transcript log on the answer volume, read back with
 //     isokit.ReadFileFromFAT after the run
 const (
+	// ScratchMarkerName is the marker file on the scratch FAT volume so
+	// guest scripts can locate the writable volume by content scan.
+	ScratchMarkerName = "winkit-scratch.marker"
 	// BootstrapScriptName is the script placed on the answer volume and
 	// invoked by the single FirstLogonCommands entry.
 	BootstrapScriptName = "winkit-bootstrap.ps1"
@@ -110,5 +113,6 @@ func GenerateBootstrapScript(cfg Config) []byte {
 			cfg.SFTPDrive = DefaultSFTPDrive
 		}
 	}
+	cfg.StructPort = winpe.GuestSerialPort
 	return []byte(templates.Render("bootstrap.ps1.tmpl", cfg))
 }

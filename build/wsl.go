@@ -45,9 +45,10 @@ const (
 	wslContinueWait    = 10 * time.Minute
 	wslSSHPollEvery    = 30 * time.Second
 	// wslBootVolumeCapacity is the virtual size of the FAT Setup boot qcow2.
-	// It holds the retail Setup boot.wim (~700MB) plus the boot chain; the
-	// qcow2 is sparse, so this is a ceiling, not an allocation.
-	wslBootVolumeCapacity = 4 * 1024 * 1024 * 1024
+	// It holds the retail Setup boot.wim (~700MB), the patched install.wim
+	// (~5GB), and the boot chain; the qcow2 is sparse, so this is a
+	// ceiling, not an allocation.
+	wslBootVolumeCapacity = 8 * 1024 * 1024 * 1024
 )
 
 // wslGosshdHostPort is the host-side port forwarded to the gosshd provisioning
@@ -84,11 +85,10 @@ func wslAnswerConfig(pwshFiles map[string][]byte, opensshName string, opensshDat
 	cfg.OpenSSHPayload = opensshName
 	cfg.OpenSSHPayloadData = opensshData
 	cfg.OpenSSHPayloadSize = len(opensshData)
-	// netkvm (network) and vioserial (structured logs) are installed by
-	// pnputil in the specialize pass, sourced from the virtio CD attached
-	// during install. Host shared folders use virtio-9p, which is handled by
-	// the inbox p9rdr.sys Plan 9 redirector (no extra driver needed).
-	cfg.VirtIODrivers = append(unattend.NetKVMDriverPaths(), unattend.VioserialDriverPaths()...)
+	// netkvm (network) is installed by pnputil in the specialize pass,
+	// sourced from the virtio CD attached during install. Serial communication
+	// uses PCI COM2 (inbox serial.sys), so vioserial is no longer needed.
+	cfg.VirtIODrivers = unattend.NetKVMDriverPaths()
 	// WSL1 needs the Microsoft-Windows-Subsystem-Linux optional feature; the
 	// specialize→OOBE reboot completes it before the bootstrap imports
 	// distro.wsl. Without it wsl --import --version 1 exits -1 (run
@@ -110,25 +110,12 @@ func wslAnswerConfig(pwshFiles map[string][]byte, opensshName string, opensshDat
 }
 
 // wslWinPEAgentConfig enables the WinPE control agent for the wsl install:
-// it tees Setup's Panther logs (setupact/setuperr) to the structured port as
-// JSON, giving the guest event stream coverage of the windowsPE phase — gosshd, the
-// other producer, only starts in specialize. The vioserial driver must be
-// drvloaded in windowsPE for the ports to exist (retail WinPE has none);
-// missing drivers degrade to a blind-but-working agent, so a virtio ISO
-// without ARM64 vioserial only costs the live tee, never the build.
-func wslWinPEAgentConfig(cfg *unattend.Config, virtioISO string, logger interface{ Warn(string, ...any) }) {
+// it tees Setup's Panther logs (setupact/setuperr) to COM2 as JSON, giving the
+// guest event stream coverage of the windowsPE phase. COM2 uses the inbox
+// serial.sys driver (pci-serial 16550), so no drvload or extra drivers are
+// needed.
+func wslWinPEAgentConfig(cfg *unattend.Config, _ string, _ interface{ Warn(string, ...any) }) {
 	cfg.WinPEAgent = true
-	drivers, err := winpe.LoadWinPEVioserialDrivers(virtioISO)
-	if err != nil {
-		logger.Warn("no ARM64 vioserial driver for WinPE — Panther logs will not stream to guest.jsonl during Setup", "err", err)
-		return
-	}
-	if cfg.AnswerDrivers == nil {
-		cfg.AnswerDrivers = make(map[string][]byte, len(drivers))
-	}
-	for p, data := range drivers {
-		cfg.AnswerDrivers[p] = data
-	}
 }
 
 // resolveWSLBackend picks the VM backend for the Windows install. Windows
@@ -158,7 +145,7 @@ func ResolveBackend() (vm.VMBackend, string, error) {
 // with the WSL1 feature enabled in specialize and the distro imported at first
 // logon. The install uses the fastest available accelerator (HVF on Mac,
 // KVM on Linux, TCG fallback); WSL1 needs no hypervisor features.
-func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, services []s6.Service, displayType string, ports buildopts.Ports, hostname string) error {
+func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, services []s6.Service, displayType string, ports buildopts.Ports, hostname, structuredLogPath string) error {
 	// --accel flag wins; then WINKIT_E2E_ACCEL env; then the best available
 	// accelerator for the host (HVF on Mac, KVM on Linux, TCG fallback).
 	if accel == "" {
@@ -280,6 +267,12 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		}
 	}
 
+	if distro.NeedsDocker() && !dockerMissing {
+		if err := distro.AddService(wsl.S6HealthcheckService()); err != nil {
+			return fmt.Errorf("adding s6-healthcheck service: %w", err)
+		}
+	}
+
 	var wslData []byte
 	if dockerMissing {
 		logger.Warn("docker not on PATH; skipping the preloaded WSL1 distro")
@@ -306,7 +299,19 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		return fmt.Errorf("reading gosshd binary: %w", err)
 	}
 
+	logger.Info("cross-compiling winkit-service wrapper", "arch", "arm64")
+	serviceExe := filepath.Join(workDir, "winkit-service.exe")
+	if err := winpe.CrossCompileService(serviceExe, "arm64"); err != nil {
+		return fmt.Errorf("cross-compiling winkit-service: %w", err)
+	}
+	serviceData, err := os.ReadFile(serviceExe)
+	if err != nil {
+		return fmt.Errorf("reading winkit-service binary: %w", err)
+	}
+
 	cfg := wslAnswerConfig(pwshFiles, filepath.Base(opensshZip), opensshData, "gosshd.exe", gosshdData)
+	cfg.ServiceBinaryName = "winkit-service.exe"
+	cfg.ServiceBinaryData = serviceData
 	if hostname != "" {
 		cfg.Hostname = hostname
 	}
@@ -330,9 +335,10 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		cfg.RcloneViaS6 = rcloneViaS6
 	}
 
-	answerImg := filepath.Join(workDir, "autounattend.img")
+	answerISO := filepath.Join(workDir, "autounattend.iso")
+	scratchImg := filepath.Join(workDir, "winkit-scratch.img")
 	logger.Info("building answer volume", "user", cfg.Username, "rdp", cfg.EnableRDP)
-	if err := unattend.BuildAnswerVolume(cfg, answerImg); err != nil {
+	if err := unattend.BuildAnswerVolume(cfg, answerISO, scratchImg); err != nil {
 		return fmt.Errorf("building answer volume: %w", err)
 	}
 
@@ -342,11 +348,11 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	}
 
 	// Booting the Windows ISO's El Torito image ASSERTs on Linux-hosted EDK2,
-	// so — like the base/WIM-builder paths — we FAT-boot the retail Setup boot
-	// chain from a qcow2 (bootindex=1). The ISO stays attached only as a file
-	// source for install.wim.
+	// so we FAT-boot the retail Setup boot chain from a qcow2 (bootindex=1).
+	// install.wim is patched to include the pe-agent for second-pass telemetry.
 	logger.Info("building Setup boot volume from Windows ISO")
-	bootFiles, err := winpe.BuildSetupBootVolumeFiles(winISO, workDir)
+	peAgentPS := winpe.PeAgentPatchSet(1, serviceExe, true)
+	bootFiles, err := winpe.BuildSetupBootVolumeFilesPatched(winISO, workDir, []winpe.WimPatchSet{peAgentPS})
 	if err != nil {
 		return fmt.Errorf("building Setup boot volume: %w", err)
 	}
@@ -372,11 +378,10 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	}
 
 	// --- Phase 1-3: boot Setup, install, first-logon bootstrap ---
-	// guest.jsonl is the raw guest event stream (QEMU vioserial chardev,
-	// written by the QEMU process). It is a work-dir intermediate: the edge
-	// (CLI / e2e test) appends it into the unified build.jsonl after the
-	// build, since two processes cannot share one append stream live.
-	guestJSONL := filepath.Join(workDir, "guest.jsonl")
+	guestJSONL := structuredLogPath
+	if guestJSONL == "" {
+		guestJSONL = filepath.Join(workDir, "guest.jsonl")
+	}
 	installOut := filepath.Join(workDir, "install")
 	secure := strings.HasPrefix(accel, "tcg")
 	logger.Info("starting Windows install VM",
@@ -385,7 +390,8 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	installCfg := vm.VMInstallConfig{
 		WindowsISO:      winISO,
 		VirtIOISO:       virtioISO,
-		AnswerVolume:    answerImg,
+		AnswerISO:       answerISO,
+		ScratchVolume:   scratchImg,
 		DiskPath:        dest,
 		CPUs:            wslCPUs,
 		MemoryGB:        wslMemoryGB,
@@ -413,12 +419,16 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	}
 	defer machine.Stop()
 
-	// Stream guest progress to the UI while Setup runs (guest.jsonl needs
-	// vioserial, up only from specialize; the plain progress log covers earlier).
+	// Stream guest logs to the UI while Setup runs.
 	stopTail := make(chan struct{})
-	go tailStream(filepath.Join(machine.OutputDir(), "guest-progress.log"), "progress", logger, stopTail)
 	go tailStream(filepath.Join(machine.OutputDir(), "serial.log"), "serial", logger, stopTail)
 	go tailStream(filepath.Join(machine.OutputDir(), "qemu.log"), "qemu", logger, stopTail)
+	// Only tail guest events when they go to a separate file. When the
+	// caller points StructuredLogPath at build.jsonl, the chardev writes
+	// land there directly; tailing would create a feedback loop.
+	if structuredLogPath == "" {
+		go tailStream(guestJSONL, "guest-event", logger, stopTail)
+	}
 	qmpSock := qemu.QMPSocketFromVM(machine)
 
 	// --- handoff: wait for the gosshd provisioning channel ---
@@ -444,6 +454,15 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		return fmt.Errorf("post-install verification: %w", err)
 	}
 	wslVerifyDeliveredSSH(ctx, osshAddr, cfg.Username, cfg.Password, logger)
+
+	// --- verify: pe-agent ran during second-pass install ---
+	peLogOut, _, peExit, _ := sshRun(ctx, provAddr, provUser, provPass,
+		`cmd /c "if exist C:\winkit-pe-agent.log (type C:\winkit-pe-agent.log) else (echo NOT_FOUND)"`)
+	if peExit == 0 && !strings.Contains(string(peLogOut), "NOT_FOUND") {
+		logger.Info("pe-agent second-pass log verified", "bytes", len(peLogOut))
+	} else {
+		logger.Warn("pe-agent second-pass log not found: SetupExecute may not have fired")
+	}
 
 	// --- verify: the WSL1 distro the bootstrap imported ---
 	// Over the delivered OpenSSH (:22) with the user's own account: WSL
@@ -539,7 +558,17 @@ func wslVerifyDistro(ctx context.Context, addr, user, pass, distro, verifyCmd, v
 			// nix.sh puts nix on PATH; init's default PATH has none).
 			fmt.Sprintf(`$env:WSL_UTF8='1'; wsl.exe -d %s -e /bin/sh -lc "%s"`, distro, verifyCmd))
 		if err == nil && code == 0 && strings.Contains(decodeWSLOutput(out), verifyContains) {
-			logger.Info(distro+" verified", "out", strings.TrimSpace(decodeWSLOutput(out)))
+			regOut, regErrOut, regCode, regErr := sshRun(ctx, addr, user, pass,
+				wsl1RegistrationProbe(distro))
+			if regErr != nil || regCode != 0 {
+				return fmt.Errorf("%s is usable but is not registered as WSL1: code=%d err=%v out=%q stderr=%q",
+					distro, regCode, regErr,
+					strings.TrimSpace(decodeWSLOutput(regOut)),
+					strings.TrimSpace(decodeWSLOutput(regErrOut)))
+			}
+			logger.Info(distro+" verified as WSL1",
+				"out", strings.TrimSpace(decodeWSLOutput(out)),
+				"registration", strings.TrimSpace(decodeWSLOutput(regOut)))
 			break
 		}
 		lastOut, lastErr = strings.TrimSpace(decodeWSLOutput(out)), strings.TrimSpace(decodeWSLOutput(errb))
@@ -562,6 +591,11 @@ func wslVerifyDistro(ctx context.Context, addr, user, pass, distro, verifyCmd, v
 			"out", strings.TrimSpace(decodeWSLOutput(out)), "stderr", strings.TrimSpace(decodeWSLOutput(errb)), "err", fmt.Sprint(err))
 	}
 	return nil
+}
+
+func wsl1RegistrationProbe(distro string) string {
+	quotedDistro := strings.ReplaceAll(distro, `'`, `''`)
+	return fmt.Sprintf(`$distro='%s'; $registration = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' -ErrorAction Stop | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DistributionName -eq $distro } | Select-Object -First 1; if (-not $registration) { Write-Error "registration not found: $distro"; exit 21 }; if (([int]$registration.Flags -band 0x8) -ne 0) { Write-Error "expected WSL1 with VM_MODE clear, got Flags=$($registration.Flags)"; exit 22 }; Write-Output "WSL1_REGISTRATION_OK Flags=$($registration.Flags) Version=$($registration.Version) BasePath=$($registration.BasePath)"`, quotedDistro)
 }
 
 // decodeWSLOutput makes wsl.exe output greppable. wsl.exe emits UTF-16LE;
