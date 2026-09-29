@@ -21,7 +21,7 @@ func newStartCmd() *cobra.Command {
 		name       string
 		hostname   string
 		accel      string
-		vnc        bool
+		vncPort    uint16
 		foreground bool
 		cpus       uint
 		memoryGB   uint64
@@ -35,7 +35,7 @@ func newStartCmd() *cobra.Command {
 		Short: "Boot a built Windows VM image",
 		Long: "Start a VM from a previously built disk image.\n" +
 			"When no image is given, discovers the build output in\n" +
-			"the current directory (winkit-base.qcow2, etc.).\n" +
+			"the current directory (winkit-full.qcow2, etc.).\n" +
 			"Loads defaults from winkit.yaml if present.\n" +
 			"Prints connection info (SSH, RDP, VNC ports) and writes\n" +
 			"state so `winkit status` and `winkit stop` can manage it.",
@@ -103,25 +103,19 @@ func newStartCmd() *cobra.Command {
 				MemoryGB:   memoryGB,
 				SSHPort:    sshPort,
 				RDPPort:    rdpPort,
+				VNCPort:    vncPort,
 				Foreground: foreground,
-				VNC:        vnc,
 			})
 			if err != nil {
 				return err
 			}
 			outDir := machine.OutputDir()
-			var vncPort uint16
-			if vnc {
-				vncPort = 5900
-			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "VM %q started (PID %d)\n", name, machine.PID())
 			fmt.Fprintf(cmd.OutOrStdout(), "  Image:  %s\n", absImage)
 			fmt.Fprintf(cmd.OutOrStdout(), "  SSH:    ssh -p %d %s@127.0.0.1\n", sshPort, gosshd.DefaultUser)
 			fmt.Fprintf(cmd.OutOrStdout(), "  RDP:    127.0.0.1:%d\n", rdpPort)
-			if vncPort > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "  VNC:    127.0.0.1:%d\n", vncPort)
-			}
+			fmt.Fprintf(cmd.OutOrStdout(), "  VNC:    127.0.0.1:%d\n", vncPort)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Logs:   %s\n", outDir)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Stop:   winkit stop\n")
 
@@ -156,7 +150,7 @@ func newStartCmd() *cobra.Command {
 	cmd.Flags().StringVar(&hostname, "hostname", "", "guest computer/NetBIOS name via SMBIOS serial; renamed on next boot (default: winkit.yaml hostname, else winkit)")
 	cmd.Flags().StringVar(&accel, "accel", "", "QEMU accelerator (kvm, hvf, tcg)")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "run in foreground (default: background)")
-	cmd.Flags().BoolVar(&vnc, "vnc", false, "enable VNC display on port 5900")
+	cmd.Flags().Uint16Var(&vncPort, "vnc-port", 5900, "host VNC port")
 	cmd.Flags().UintVar(&cpus, "cpus", 4, "number of vCPUs")
 	cmd.Flags().Uint64Var(&memoryGB, "memory", 6, "memory in GB")
 	cmd.Flags().Uint16Var(&sshPort, "ssh-port", 20022, "host SSH port")
@@ -178,11 +172,12 @@ func nameFromImage(path string) string {
 // conventional names in order of most to least common stage.
 func discoverImage(dir string) string {
 	for _, name := range []string{
-		"winkit-base.qcow2",
-		"winkit-wsl.qcow2",
-		"winkit-core.qcow2",
-		"winkit-base.raw",
-		"winkit-wsl.raw",
+		"winkit-full.qcow2",
+		"winkit-full-wsl.qcow2",
+		"winkit-pe.qcow2",
+		"winkit-pe-wsl.qcow2",
+		"winkit-full.raw",
+		"winkit-full-wsl.raw",
 	} {
 		p := filepath.Join(dir, name)
 		if _, err := os.Stat(p); err == nil {

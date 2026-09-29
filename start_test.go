@@ -30,7 +30,7 @@ func TestStart_MissingImage(t *testing.T) {
 
 func TestStart_RejectsAlreadyRunning(t *testing.T) {
 	dir := t.TempDir()
-	image := filepath.Join(dir, "winkit-base.qcow2")
+	image := filepath.Join(dir, "winkit-full.qcow2")
 	if err := os.WriteFile(image, []byte("disk"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestStart_RejectsAlreadyRunning(t *testing.T) {
 
 	// Register a "running" VM for this image using our own live PID.
 	if err := vmstate.Save(stateDir, &vmstate.State{
-		Name:      "winkit-base",
+		Name:      "winkit-full",
 		ImagePath: image,
 		PID:       os.Getpid(),
 		Backend:   "qemu",
