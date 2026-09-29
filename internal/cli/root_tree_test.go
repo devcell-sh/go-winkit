@@ -18,7 +18,7 @@ func TestCommandTree_TopLevel(t *testing.T) {
 		names = append(names, c.Name())
 	}
 	sort.Strings(names)
-	assert.Equal(t, []string{"build", "debug", "export", "init", "start", "status", "stop"}, names)
+	assert.Equal(t, []string{"build", "debug", "export", "init", "logs", "ssh", "start", "status", "stop"}, names)
 }
 
 func TestCommandTree_Export(t *testing.T) {
