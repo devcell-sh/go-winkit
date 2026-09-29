@@ -22,6 +22,7 @@ import (
 	"github.com/devcell-sh/go-winkit/media/virtio"
 	"github.com/devcell-sh/go-winkit/s6"
 	"github.com/devcell-sh/go-winkit/vm/qemu"
+	"github.com/devcell-sh/go-winkit/vm/vmstate"
 )
 
 // buildAccels lists accelerators valid for the build VM.
@@ -177,9 +178,19 @@ func newBuildCmd() *cobra.Command {
 			if info, err := os.Stat(dest); (err == nil && info.IsDir()) || strings.HasSuffix(dest, "/") {
 				dest = filepath.Join(dest, imageformat.DefaultOutputName(stage, imgFmt))
 			}
-			if _, err := os.Stat(dest); err == nil && !force {
-				if !confirm(cmd, fmt.Sprintf("%s exists — overwrite? [y/N] ", dest)) {
-					return fmt.Errorf("aborted: %s exists", dest)
+			if _, err := os.Stat(dest); err == nil {
+				if qemu.IsImageLocked(dest) {
+					if !force {
+						return fmt.Errorf("%s is in use by a running VM -- stop it first with: winkit stop %s", dest, dest)
+					}
+					if err := stopVMForImage(cmd, dest); err != nil {
+						return err
+					}
+				}
+				if !force {
+					if !confirm(cmd, fmt.Sprintf("%s exists — overwrite? [y/N] ", dest)) {
+						return fmt.Errorf("aborted: %s exists", dest)
+					}
 				}
 			}
 
@@ -582,6 +593,39 @@ func requireWimlib() error {
 		"Requires libwim headers at build time (brew install wimlib, or\n" +
 		"nix profile install nixpkgs#wimlib). The wimlib-imagex CLI alone\n" +
 		"is not used — the Go binding links libwim when compiled.")
+}
+
+func stopVMForImage(cmd *cobra.Command, imagePath string) error {
+	absPath, err := filepath.Abs(imagePath)
+	if err != nil {
+		absPath = imagePath
+	}
+	dir := vmstate.DefaultDir()
+	st, err := vmstate.FindByImage(dir, absPath)
+	if err != nil || st == nil {
+		// No state entry; try SIGTERM on whatever holds the lock.
+		// Can't do much without a PID, so just ask the user.
+		return fmt.Errorf("%s is locked by an unknown process -- stop it manually", imagePath)
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "stopping VM %q (PID %d) to rebuild\n", st.Name, st.PID)
+	p, err := os.FindProcess(st.PID)
+	if err != nil {
+		return fmt.Errorf("finding VM process: %w", err)
+	}
+	_ = p.Signal(os.Interrupt)
+	if !waitForExit(st.PID, 10*time.Second) {
+		_ = p.Kill()
+		waitForExit(st.PID, 5*time.Second)
+	}
+	_ = vmstate.Remove(dir, st.Name)
+	// Wait briefly for QEMU to release the file lock.
+	for i := 0; i < 10; i++ {
+		if !qemu.IsImageLocked(imagePath) {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("%s is still locked after stopping VM", imagePath)
 }
 
 func confirm(cmd *cobra.Command, prompt string) bool {
