@@ -44,8 +44,8 @@ type StartOpts struct {
 	// Foreground keeps the VM attached to the calling process; the
 	// default detaches it so the handle outlives the caller.
 	Foreground bool
-	// VNC starts a VNC server on display :0 (port 5900).
-	VNC bool
+	// VNCPort selects the host VNC port (default 5900). VNC is always enabled.
+	VNCPort uint16
 	// Logger receives host-side events; nil logs to run.jsonl in the
 	// VM's output directory.
 	Logger *slog.Logger
@@ -182,11 +182,11 @@ func Start(ctx context.Context, opts StartOpts) (vm.VM, error) {
 		SMBIOSSerial:    hostname,
 	}
 	displayType := "none"
-	var vncPort uint16
-	if opts.VNC {
-		displayType = "vnc=:0"
+	vncPort := opts.VNCPort
+	if vncPort == 0 {
 		vncPort = 5900
 	}
+	displayType = fmt.Sprintf("vnc=:%d", vncPort-5900)
 	if backendName == "qemu" {
 		runCfg.BackendExtra = &qemu.RunOptions{
 			BootVolume:        bootVolume,

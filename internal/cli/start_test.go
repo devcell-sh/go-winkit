@@ -38,8 +38,8 @@ func TestDiscoverImage(t *testing.T) {
 		t.Fatalf("expected empty, got %q", got)
 	}
 
-	// Create winkit-base.qcow2.
-	disk := filepath.Join(dir, "winkit-base.qcow2")
+	// Create winkit-full.qcow2.
+	disk := filepath.Join(dir, "winkit-full.qcow2")
 	os.WriteFile(disk, []byte("fake"), 0o644)
 	got := discoverImage(dir)
 	if got != disk {
@@ -51,13 +51,13 @@ func TestDiscoverImagePriority(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create both base and wsl.
-	os.WriteFile(filepath.Join(dir, "winkit-wsl.qcow2"), []byte("w"), 0o644)
-	os.WriteFile(filepath.Join(dir, "winkit-base.qcow2"), []byte("b"), 0o644)
+	os.WriteFile(filepath.Join(dir, "winkit-full-wsl.qcow2"), []byte("w"), 0o644)
+	os.WriteFile(filepath.Join(dir, "winkit-full.qcow2"), []byte("b"), 0o644)
 
 	got := discoverImage(dir)
-	want := filepath.Join(dir, "winkit-base.qcow2")
+	want := filepath.Join(dir, "winkit-full.qcow2")
 	if got != want {
-		t.Errorf("discoverImage = %q, want %q (base takes priority)", got, want)
+		t.Errorf("discoverImage = %q, want %q (full takes priority)", got, want)
 	}
 }
 
