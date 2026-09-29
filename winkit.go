@@ -53,10 +53,7 @@ func Build(ctx context.Context, cfg build.Config) error {
 		return fmt.Errorf("creating work dir: %w", err)
 	}
 
-	switch cfg.Opts.Stage() {
-	case buildopts.StagePE:
-		return build.PE(ctx, cfg)
-	case buildopts.StageWSL:
+	if cfg.Opts.WSL != nil {
 		if cfg.WSLImage == "" {
 			cfg.WSLImage = cfg.Opts.WSL.Image
 		}
@@ -70,6 +67,12 @@ func Build(ctx context.Context, cfg build.Config) error {
 			}
 			cfg.WSLServices = svcs
 		}
+	}
+
+	switch cfg.Opts.Stage() {
+	case buildopts.StagePE, buildopts.StagePEWSL:
+		return build.PE(ctx, cfg)
+	case buildopts.StageFullWSL:
 		return build.WSL(ctx, cfg)
 	default:
 		return build.Base(ctx, cfg)

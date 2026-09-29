@@ -7,8 +7,8 @@ import (
 )
 
 func TestPEDataDiskPath(t *testing.T) {
-	got := PEDataDiskPath(filepath.Join("out", "winkit-core.qcow2"))
-	want := filepath.Join("out", "winkit-core-data.qcow2")
+	got := PEDataDiskPath(filepath.Join("out", "winkit-pe-wsl.qcow2"))
+	want := filepath.Join("out", "winkit-pe-wsl-data.qcow2")
 	if got != want {
 		t.Fatalf("PEDataDiskPath = %q, want %q", got, want)
 	}
@@ -16,8 +16,8 @@ func TestPEDataDiskPath(t *testing.T) {
 
 func TestArtifactRoundTripResolvesRelocatableMedia(t *testing.T) {
 	dir := t.TempDir()
-	boot := filepath.Join(dir, "winkit-core.qcow2")
-	dataDisk := filepath.Join(dir, "winkit-core-data.qcow2")
+	boot := filepath.Join(dir, "winkit-pe-wsl.qcow2")
+	dataDisk := filepath.Join(dir, "winkit-pe-wsl-data.qcow2")
 	for _, path := range []string{boot, dataDisk} {
 		if err := os.WriteFile(path, []byte("media"), 0o644); err != nil {
 			t.Fatal(err)

@@ -6,7 +6,7 @@
 //	go run ./examples/library-consumer \
 //	    -windows-iso ~/.cache/winkit/windows.iso \
 //	    -virtio-iso  ~/.cache/winkit/virtio-win.iso \
-//	    -dest ./winkit-wsl.qcow2
+//	    -dest ./winkit-full-wsl.qcow2
 package main
 
 import (
@@ -27,7 +27,7 @@ func main() {
 	var (
 		windowsISO = flag.String("windows-iso", "", "path to the Windows installer ISO (required)")
 		virtioISO  = flag.String("virtio-iso", "", "path to the virtio-win driver ISO (required)")
-		dest       = flag.String("dest", "winkit-wsl.qcow2", "output image path")
+		dest       = flag.String("dest", "winkit-full-wsl.qcow2", "output image path")
 		cacheDir   = flag.String("cache-dir", "", "media/rootfs cache dir")
 		wslImage   = flag.String("wsl-image", "alpine", "WSL rootfs: docker ref, tarball URL, or .wsl path")
 		boot       = flag.Bool("boot", false, "boot the image after building")

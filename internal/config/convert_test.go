@@ -94,8 +94,8 @@ func TestToBuildOpts_PEWSLConversion(t *testing.T) {
 	if !opts.PE || opts.WSL == nil || opts.WSL.Image != "alpine" {
 		t.Fatalf("PE+WSL conversion = %+v", opts)
 	}
-	if opts.Stage() != buildopts.StagePE {
-		t.Fatalf("PE+WSL stage = %q, want %q", opts.Stage(), buildopts.StagePE)
+	if opts.Stage() != buildopts.StagePEWSL {
+		t.Fatalf("PE+WSL stage = %q, want %q", opts.Stage(), buildopts.StagePEWSL)
 	}
 }
 

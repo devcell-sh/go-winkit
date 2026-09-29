@@ -23,11 +23,11 @@ func loadExample(t *testing.T, name string) *config.Config {
 	return cfg
 }
 
-func TestExampleWSLAlpine(t *testing.T) {
-	cfg := loadExample(t, "wsl-alpine")
+func TestExampleFullWSL1Alpine(t *testing.T) {
+	cfg := loadExample(t, "full-wsl1-alpine")
 
 	if cfg.WSL == nil || cfg.WSL.Image != "alpine" {
-		t.Fatal("wsl-alpine example must use the opaque alpine image")
+		t.Fatal("full-wsl1-alpine example must use the opaque alpine image")
 	}
 
 	opts, err := cfg.ToBuildOpts()
@@ -35,16 +35,16 @@ func TestExampleWSLAlpine(t *testing.T) {
 		t.Fatal(err)
 	}
 	if opts.WSL.ServicesDir == "" {
-		t.Fatal("wsl-alpine example must declare wsl.services")
+		t.Fatal("full-wsl1-alpine example must declare wsl.services")
 	}
 
 	// The declared services dir must be a loadable s6 scan dir.
-	svcs, err := s6.LoadDir(filepath.Join("examples", "wsl-alpine", opts.WSL.ServicesDir))
+	svcs, err := s6.LoadDir(filepath.Join("examples", "full-wsl1-alpine", opts.WSL.ServicesDir))
 	if err != nil {
 		t.Fatalf("services dir must load as s6 scan dir: %v", err)
 	}
 	if len(svcs) == 0 {
-		t.Fatal("wsl-alpine example must ship at least one service")
+		t.Fatal("full-wsl1-alpine example must ship at least one service")
 	}
 	for _, s := range svcs {
 		if err := s.Validate(); err != nil {
@@ -60,7 +60,7 @@ func TestExampleWSLAlpine(t *testing.T) {
 		}
 	}
 	if wslHooks == 0 {
-		t.Fatal("wsl-alpine example must carry a wsl-phase command")
+		t.Fatal("full-wsl1-alpine example must carry a wsl-phase command")
 	}
 }
 
