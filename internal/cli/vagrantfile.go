@@ -28,7 +28,7 @@ func newVagrantCmd() *cobra.Command {
 			"  vagrant up",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			image := "./winkit-base.qcow2"
+			image := "./winkit-full.qcow2"
 			if len(args) == 1 {
 				image = args[0]
 			}

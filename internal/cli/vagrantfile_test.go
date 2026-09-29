@@ -26,7 +26,7 @@ func runVagrantfile(t *testing.T, stdin string, args ...string) (string, error) 
 
 func TestVagrantfile_GeneratesNextToImage(t *testing.T) {
 	dir := t.TempDir()
-	image := filepath.Join(dir, "winkit-base.qcow2")
+	image := filepath.Join(dir, "winkit-full.qcow2")
 	require.NoError(t, os.WriteFile(image, []byte("disk"), 0o644))
 	cfgPath := filepath.Join(dir, "winkit.yaml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte("ports:\n  openssh: 10122\n  rdp: 13389\n"), 0o644))
@@ -37,7 +37,7 @@ func TestVagrantfile_GeneratesNextToImage(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(dir, "Vagrantfile"))
 	require.NoError(t, err)
-	assert.Contains(t, string(data), `File.expand_path("winkit-base.qcow2", __dir__)`)
+	assert.Contains(t, string(data), `File.expand_path("winkit-full.qcow2", __dir__)`)
 	assert.Contains(t, string(data), `qe.ssh_port = Integer(ENV.fetch("WINKIT_SSH_PORT", 10122))`)
 	assert.Contains(t, string(data), `guest: 3389, host: 13389, id: "rdp", auto_correct: true`)
 }
@@ -56,7 +56,7 @@ func TestVagrantfile_RejectsNonQcow2(t *testing.T) {
 
 func TestVagrantfile_PromptDeclinedAborts(t *testing.T) {
 	dir := t.TempDir()
-	image := filepath.Join(dir, "winkit-base.qcow2")
+	image := filepath.Join(dir, "winkit-full.qcow2")
 	require.NoError(t, os.WriteFile(image, []byte("disk"), 0o644))
 	vf := filepath.Join(dir, "Vagrantfile")
 	require.NoError(t, os.WriteFile(vf, []byte("existing"), 0o644))

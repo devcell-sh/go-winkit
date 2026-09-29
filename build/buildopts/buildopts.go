@@ -154,30 +154,33 @@ func (o *BuildOpts) SortHooks() {
 }
 
 // Stage names the build variant an opts set produces. The string values
-// double as output-image naming ("winkit-core.qcow2" etc.), matching the
-// CLI's historical stage names.
+// double as output-image naming ("winkit-full.qcow2" etc.).
 type Stage string
 
 const (
-	// StagePE is the WinPE boot-volume build (~4GB FAT, ephemeral).
-	StagePE Stage = "core"
-	// StageWSL is a full install with WSL enabled and a distro imported.
-	StageWSL Stage = "wsl"
-	// StageBase is a full install without WSL.
-	StageBase Stage = "base"
+	// StageFull is a full Windows install without WSL.
+	StageFull Stage = "full"
+	// StageFullWSL is a full Windows install with WSL enabled and a distro imported.
+	StageFullWSL Stage = "full-wsl"
+	// StagePE is a WinPE boot-volume build (~4GB FAT, ephemeral, no WSL).
+	StagePE Stage = "pe"
+	// StagePEWSL is a WinPE boot volume bundled with a WSL1 runtime and distro.
+	StagePEWSL Stage = "pe-wsl"
 )
 
-// Stage resolves which build variant these opts select: PE wins, then
-// WSL, else base. PE+WSL selects the PE stage and asks its builder to
-// package the WSL1 runtime and distro into the boot artifact.
+// Stage resolves which build variant these opts select from the 2x2
+// matrix of install-type (full/PE) x WSL (on/off).
 func (o *BuildOpts) Stage() Stage {
-	if o.PE {
+	switch {
+	case o.PE && o.WSL != nil:
+		return StagePEWSL
+	case o.PE:
 		return StagePE
+	case o.WSL != nil:
+		return StageFullWSL
+	default:
+		return StageFull
 	}
-	if o.WSL != nil {
-		return StageWSL
-	}
-	return StageBase
 }
 
 type FromKind int

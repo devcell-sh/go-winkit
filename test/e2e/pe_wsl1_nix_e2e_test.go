@@ -34,7 +34,7 @@ func TestExamplePEWSL1Nix_E2E(t *testing.T) {
 	exampleDir, err := filepath.Abs(filepath.Join("..", "..", "examples", "pe-wsl1-nix"))
 	require.NoError(t, err)
 	resultDir := testutil.ResultDir(t)
-	dest := filepath.Join(resultDir, "winkit-core.qcow2")
+	dest := filepath.Join(resultDir, "winkit-pe-wsl.qcow2")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Minute)
 	defer cancel()

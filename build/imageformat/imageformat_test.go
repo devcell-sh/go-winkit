@@ -150,9 +150,10 @@ func TestPackageUTM_ConfigPlistDiskUUID(t *testing.T) {
 }
 
 func TestDefaultOutputName(t *testing.T) {
-	assert.Equal(t, "winkit-base.qcow2", DefaultOutputName("base", Qcow2))
-	assert.Equal(t, "winkit-core.qcow2", DefaultOutputName("core", Qcow2))
-	assert.Equal(t, "winkit-wsl.qcow2", DefaultOutputName("wsl", Qcow2))
-	assert.Equal(t, "winkit-base.utm", DefaultOutputName("base", UTM))
-	assert.Equal(t, "winkit-wsl.utm", DefaultOutputName("wsl", UTM))
+	assert.Equal(t, "winkit-full.qcow2", DefaultOutputName("full", Qcow2))
+	assert.Equal(t, "winkit-pe.qcow2", DefaultOutputName("pe", Qcow2))
+	assert.Equal(t, "winkit-full-wsl.qcow2", DefaultOutputName("full-wsl", Qcow2))
+	assert.Equal(t, "winkit-pe-wsl.qcow2", DefaultOutputName("pe-wsl", Qcow2))
+	assert.Equal(t, "winkit-full.utm", DefaultOutputName("full", UTM))
+	assert.Equal(t, "winkit-full-wsl.utm", DefaultOutputName("full-wsl", UTM))
 }

@@ -21,8 +21,8 @@ func TestValidate_PEAndWSLSelectsWSL1PE(t *testing.T) {
 	if err := opts.Validate(); err != nil {
 		t.Fatalf("PE + WSL must select the WSL1 PE build: %v", err)
 	}
-	if got := opts.Stage(); got != StagePE {
-		t.Fatalf("Stage() = %q, want %q", got, StagePE)
+	if got := opts.Stage(); got != StagePEWSL {
+		t.Fatalf("Stage() = %q, want %q", got, StagePEWSL)
 	}
 }
 
@@ -207,15 +207,30 @@ func TestStage(t *testing.T) {
 		opts BuildOpts
 		want Stage
 	}{
-		{"base by default", BuildOpts{}, StageBase},
+		{"full by default", BuildOpts{}, StageFull},
 		{"pe", BuildOpts{PE: true}, StagePE},
-		{"pe wsl1", BuildOpts{PE: true, WSL: &WSLConfig{Image: "alpine"}}, StagePE},
-		{"wsl", BuildOpts{WSL: &WSLConfig{Image: "alpine"}}, StageWSL},
+		{"pe-wsl", BuildOpts{PE: true, WSL: &WSLConfig{Image: "alpine"}}, StagePEWSL},
+		{"full-wsl", BuildOpts{WSL: &WSLConfig{Image: "alpine"}}, StageFullWSL},
 	}
 	for _, tt := range tests {
 		if got := tt.opts.Stage(); got != tt.want {
 			t.Errorf("%s: Stage() = %q, want %q", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestStageStringValues(t *testing.T) {
+	if string(StageFull) != "full" {
+		t.Errorf("StageFull = %q, want %q", StageFull, "full")
+	}
+	if string(StageFullWSL) != "full-wsl" {
+		t.Errorf("StageFullWSL = %q, want %q", StageFullWSL, "full-wsl")
+	}
+	if string(StagePE) != "pe" {
+		t.Errorf("StagePE = %q, want %q", StagePE, "pe")
+	}
+	if string(StagePEWSL) != "pe-wsl" {
+		t.Errorf("StagePEWSL = %q, want %q", StagePEWSL, "pe-wsl")
 	}
 }
 
