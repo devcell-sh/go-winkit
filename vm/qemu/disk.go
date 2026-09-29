@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // CreateDisk creates a qcow2 disk image of the given size.
@@ -50,6 +51,20 @@ func FlattenQcow2(src, dst string) error {
 		return fmt.Errorf("qemu-img convert (flatten): %w\n%s", err, out)
 	}
 	return nil
+}
+
+// IsImageLocked reports whether a qcow2 image is held by a running QEMU
+// process. It probes via qemu-img info, which tries to acquire a shared
+// lock and fails when QEMU holds an exclusive write lock on the file.
+func IsImageLocked(path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	out, err := exec.Command("qemu-img", "info", path).CombinedOutput()
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(out)), "lock")
 }
 
 // QEMUBinaryPath returns the path to qemu-system-aarch64.
