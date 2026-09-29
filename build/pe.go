@@ -76,12 +76,28 @@ func PE(ctx context.Context, c Config) error {
 		return err
 	}
 
+	// TODO: re-enable hostname patch after isolating crash.
+	// hostname := winpe.GuestHostname("")
+	// if c.Opts != nil && c.Opts.Hostname != "" {
+	// 	hostname = c.Opts.Hostname
+	// }
+	bootWimPath := filepath.Join(c.WorkDir, "stage", "sources", "boot.wim")
+
 	if !wsl1 {
+		// TODO: re-enable hostname patch after isolating crash.
+		// logger.Info("setting PE hostname", "hostname", hostname)
+		// if err := winpe.PatchWIM(bootWimPath, winpe.HostnamePatchSet(2, hostname)); err != nil {
+		// 	return fmt.Errorf("patching hostname: %w", err)
+		// }
+		// patchedBootWim, err := os.ReadFile(bootWimPath)
+		// if err != nil {
+		// 	return fmt.Errorf("reading patched boot.wim: %w", err)
+		// }
+		// files["/sources/boot.wim"] = patchedBootWim
 		return qemu.CreateFATQcow2(c.Dest, files, PECapacity)
 	}
 
 	logger.Info("assembling WSL1 WinPE runtime")
-	bootWimPath := filepath.Join(c.WorkDir, "stage", "sources", "boot.wim")
 	installWimPath := filepath.Join(c.WorkDir, "install.wim")
 	if err := winpe.Extract7zToFile(c.WindowsISO, "sources/install.wim", installWimPath); err != nil {
 		return fmt.Errorf("extracting install.wim for WSL1: %w", err)
@@ -106,6 +122,11 @@ func PE(ctx context.Context, c Config) error {
 	if err := winpe.PatchWIM(bootWimPath, patch); err != nil {
 		return fmt.Errorf("patching WSL1 boot.wim: %w", err)
 	}
+	// TODO: re-enable hostname patch after isolating crash.
+	// logger.Info("setting PE hostname", "hostname", hostname)
+	// if err := winpe.PatchWIM(bootWimPath, winpe.HostnamePatchSet(2, hostname)); err != nil {
+	// 	return fmt.Errorf("patching hostname: %w", err)
+	// }
 	patchedBootWim, err := os.ReadFile(bootWimPath)
 	if err != nil {
 		return fmt.Errorf("reading patched WSL1 boot.wim: %w", err)
@@ -137,9 +158,23 @@ func PE(ctx context.Context, c Config) error {
 		return err
 	}
 	dataDisk := PEDataDiskPath(c.Dest)
-	logger.Info("creating PE+WSL1 writable disk", "dest", dataDisk, "size_gb", PEWSL1DataDiskSizeGB)
-	if err := qemu.CreateDisk(dataDisk, PEWSL1DataDiskSizeGB); err != nil {
-		return err
+	if c.OfflineImport {
+		logger.Info("offline import: creating pre-populated NTFS data disk", "dest", dataDisk)
+		if err := OfflineImportWSL1(OfflineImportOpts{
+			DiskPath:      dataDisk,
+			SizeGB:        PEWSL1DataDiskSizeGB,
+			DistroTarball: distroPath,
+			DistroName:    winpe.WSL1PEDistroName,
+			User:          winpe.WSL1PEUserName,
+			BootWimPath:   bootWimPath,
+		}); err != nil {
+			return fmt.Errorf("offline import: %w", err)
+		}
+	} else {
+		logger.Info("creating PE+WSL1 writable disk", "dest", dataDisk, "size_gb", PEWSL1DataDiskSizeGB)
+		if err := qemu.CreateDisk(dataDisk, PEWSL1DataDiskSizeGB); err != nil {
+			return err
+		}
 	}
 	return WriteArtifact(c.Dest, Artifact{
 		Kind:       ArtifactKindPEWSL1,

@@ -1,6 +1,10 @@
 package winpe
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/devcell-sh/go-regedit"
+)
 
 // NetBIOSNameMax is the hard limit on a Windows computer name.
 const NetBIOSNameMax = 15
@@ -33,4 +37,22 @@ func GuestHostname(cellID string) string {
 		return defaultGuestHostname
 	}
 	return clean
+}
+
+// HostnamePatchSet returns a WimPatchSet that pre-seeds the ComputerName
+// registry value in the SYSTEM hive. wpeinit reads this at boot and uses
+// it instead of generating a random MININT-xxxxxxx name.
+func HostnamePatchSet(imageNum int, hostname string) WimPatchSet {
+	return WimPatchSet{
+		ImageNum: imageNum,
+		KeyWrites: []RegistryKeyWrite{{
+			HivePath: systemHivePath,
+			KeyPath:  `ControlSet001\Control\ComputerName\ComputerName`,
+			Spec: &regedit.Key{
+				Values: map[string]regedit.Value{
+					"ComputerName": szValue(strings.ToUpper(hostname)),
+				},
+			},
+		}},
+	}
 }

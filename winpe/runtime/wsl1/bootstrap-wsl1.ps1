@@ -38,17 +38,53 @@ function Invoke-NativeChecked {
 }
 
 try {
+    # The stock boot.sdi NTFS BPB declares ~3 MB (6173 sectors) but the WIM
+    # overlay inflates X:\ far beyond that. lxcore's drvfs rejects the stale
+    # geometry with EOVERFLOW, so patch total_sectors before any WSL work.
+    Write-BootstrapLog 'Patching X: ramdisk BPB for WSL1 drvfs compatibility'
+    try {
+        & (Join-Path $runtimeRoot 'patch-ramdisk-bpb.ps1') 2>&1 |
+            ForEach-Object { Write-BootstrapLog ([string] $_) }
+    } catch {
+        Write-BootstrapLog "BPB patch failed (non-fatal): $_"
+    }
+
+    # Catalog registration and kernel driver startup require SYSTEM context.
+    # When running under winkit-service init, these are already handled by
+    # the supervisor; failures here are expected and non-fatal.
     Write-BootstrapLog 'Registering WSL1 component catalogs'
-    Invoke-NativeChecked $service @('add-catalogs', '--dir', 'X:\Windows\winkit\WSL1Catalogs')
+    try {
+        Invoke-NativeChecked $service @('add-catalogs', '--dir', 'X:\Windows\winkit\WSL1Catalogs')
+    } catch {
+        Write-BootstrapLog "add-catalogs skipped (handled by init): $_"
+    }
 
     foreach ($name in @('bfs', 'bindflt', 'afunix', 'wcifs', 'P9Rdr')) {
         Write-BootstrapLog "Ensuring service $name is running"
-        Invoke-NativeChecked $service @('ensure-service', '--name', $name)
+        try {
+            Invoke-NativeChecked $service @('ensure-service', '--name', $name)
+        } catch {
+            Write-BootstrapLog "ensure-service $name skipped (handled by init): $_"
+        }
     }
 
     if (-not (Test-Path 'E:\')) {
-        Write-BootstrapLog 'Preparing the writable WSL1 disk'
-        Invoke-NativeChecked 'diskpart.exe' @('/s', (Join-Path $runtimeRoot 'prepare-wsl1-disk.txt'))
+        # Check if a pre-formatted WSLROOT volume was auto-mounted at a
+        # different letter (offline import pre-populates the NTFS disk at
+        # build time). Reassign it to E: so the rest of the bootstrap can
+        # use a fixed path.
+        $wslDrive = [System.IO.DriveInfo]::GetDrives() |
+            Where-Object { $_.IsReady -and $_.VolumeLabel -eq 'WSLROOT' } |
+            Select-Object -First 1
+        if ($wslDrive) {
+            $letter = $wslDrive.Name[0]
+            Write-BootstrapLog "Pre-formatted WSLROOT found at ${letter}: — reassigning to E:"
+            $dpScript = "select volume $letter`nassign letter=E"
+            $dpScript | diskpart.exe | ForEach-Object { Write-BootstrapLog ([string] $_) }
+        } else {
+            Write-BootstrapLog 'Preparing the writable WSL1 disk'
+            Invoke-NativeChecked 'diskpart.exe' @('/s', (Join-Path $runtimeRoot 'prepare-wsl1-disk.txt'))
+        }
     }
     if (-not (Test-Path 'E:\')) {
         throw 'writable WSL1 volume E: is unavailable after disk preparation'

@@ -56,6 +56,14 @@ type Config struct {
 	// build. A service named like a built-in (sshd) overrides it.
 	WSLServices []s6.Service
 
+	// OfflineImport, when true, pre-populates the PE data disk at build
+	// time: the distro rootfs is extracted onto NTFS and the user registry
+	// hive is seeded with Lxss entries. This eliminates the wsl --import
+	// step at boot, trading build time for faster guest startup.
+	// Requires Docker (privileged, for ntfs-3g mount), mkntfs, hivexregedit,
+	// and wimextract on the build host.
+	OfflineImport bool
+
 	// StructuredLogPath, when set, is the host-side file that receives
 	// the guest's structured event stream (pe-agent JSONL via
 	// virtio-serial). Empty falls back to workDir/guest.jsonl.
