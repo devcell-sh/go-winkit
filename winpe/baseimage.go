@@ -1,9 +1,11 @@
 package winpe
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -13,6 +15,7 @@ const (
 	GosshdShellCmdName = "gosshd.cmd"
 	GosshdLogName      = "gosshd.log"
 	ServiceVolumeName  = "winkit-service.exe"
+	InitManifestName   = "init.json"
 
 	// GosshdStructuredPort is the guest path of the serial port gosshd
 	// emits per-session records to (COM2, backed by build.jsonl on the
@@ -126,12 +129,24 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 	}
 
 	payload := map[string][]byte{
-		"winpeshl.ini":     []byte("[LaunchApps]\r\n" + `X:\winkit\` + GosshdShellCmdName + "\r\n"),
-		GosshdShellCmdName: generateGosshdShellCmd(infs, cfg.ServiceExe != "", cfg.GosshdAddr, cfg.StartupCommand),
-		GosshdVolumeName:   gosshd,
+		GosshdVolumeName: gosshd,
 	}
 	if serviceData != nil {
 		payload[ServiceVolumeName] = serviceData
+		wsl1Bootstrap := ""
+		if cfg.StartupCommand != "" {
+			wsl1Bootstrap = `X:\winkit\bootstrap-wsl1.ps1`
+		}
+		payload[InitManifestName] = GenerateInitManifest(
+			infs, cfg.GosshdAddr,
+			WSL1PEUserName, wsl1PEUserPassword,
+			wsl1Bootstrap,
+		)
+		payload["winpeshl.ini"] = []byte("[LaunchApps]\r\n" +
+			`X:\winkit\` + ServiceVolumeName + " init --config X:\\winkit\\" + InitManifestName + "\r\n")
+	} else {
+		payload["winpeshl.ini"] = []byte("[LaunchApps]\r\n" + `X:\winkit\` + GosshdShellCmdName + "\r\n")
+		payload[GosshdShellCmdName] = generateGosshdShellCmd(infs, false, cfg.GosshdAddr, cfg.StartupCommand)
 	}
 	for name, data := range payload {
 		if err := os.WriteFile(filepath.Join(injectDir, name), data, 0o644); err != nil {
@@ -198,4 +213,43 @@ func generateGosshdShellCmd(driverINFs []string, peAgent bool, gosshdAddr, start
 	b.WriteString(`X:\winkit\` + GosshdVolumeName + " " + addrArg + `X:\winkit\` + GosshdLogName +
 		" " + GosshdStructuredPort + "\r\n")
 	return []byte(b.String())
+}
+
+// initManifest mirrors the initConfig struct in cmd/winkit-service.
+type initManifest struct {
+	Drivers        []string `json:"drivers"`
+	Gosshd         string   `json:"gosshd"`
+	GosshdAddr     string   `json:"gosshdAddr,omitempty"`
+	User           string   `json:"user"`
+	Password       string   `json:"password"`
+	LogSerial      string   `json:"logSerial,omitempty"`
+	LogFile        string   `json:"logFile,omitempty"`
+	WSL1Bootstrap  string   `json:"wsl1Bootstrap,omitempty"`
+	WSL1CatalogDir string   `json:"wsl1CatalogDir,omitempty"`
+	WSL1Services   []string `json:"wsl1Services,omitempty"`
+}
+
+// wsl1KernelServices are the kernel drivers that must be running before
+// WSLService can start. They are registered by the WSL1 WIM patches and
+// need to be started explicitly in WinPE (no boot-start in the ramdisk).
+var wsl1KernelServices = []string{"bfs", "bindflt", "afunix", "wcifs", "P9Rdr"}
+
+// GenerateInitManifest produces the init.json that winkit-service init reads.
+func GenerateInitManifest(driverINFs []string, gosshdAddr, user, password, wsl1Bootstrap string) []byte {
+	sort.Strings(driverINFs)
+	m := initManifest{
+		Drivers:       driverINFs,
+		Gosshd:        `X:\winkit\` + GosshdVolumeName,
+		GosshdAddr:    gosshdAddr,
+		User:          user,
+		Password:      password,
+		LogSerial:     GuestSerialPort,
+		WSL1Bootstrap: wsl1Bootstrap,
+	}
+	if wsl1Bootstrap != "" {
+		m.WSL1CatalogDir = `X:\Windows\winkit\WSL1Catalogs`
+		m.WSL1Services = wsl1KernelServices
+	}
+	data, _ := json.MarshalIndent(m, "", "  ")
+	return data
 }

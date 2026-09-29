@@ -36,6 +36,7 @@ var validVerbs = map[string]bool{
 	"start": true, "stop": true, "status": true,
 	"run":            true,
 	"run-user":       true,
+	"init":           true,
 	"add-catalogs":   true,
 	"find-catalog":   true,
 	"ensure-service": true,
@@ -53,6 +54,7 @@ type options struct {
 	currentDir string
 	admin      bool
 	detach     bool
+	configPath string
 	catalogDir string
 	filePath   string
 }
@@ -112,6 +114,11 @@ func parseOptions(args []string) (options, error) {
 			opts.admin = true
 		case "--detach":
 			opts.detach = true
+		case "--config":
+			if i+1 < len(args) {
+				opts.configPath = args[i+1]
+				i++
+			}
 		case "--dir":
 			if i+1 < len(args) {
 				opts.catalogDir = args[i+1]
@@ -136,6 +143,12 @@ func parseOptions(args []string) (options, error) {
 	if opts.verb == "find-catalog" {
 		if opts.filePath == "" {
 			return opts, fmt.Errorf("find-catalog requires --file")
+		}
+		return opts, nil
+	}
+	if opts.verb == "init" {
+		if opts.configPath == "" {
+			return opts, fmt.Errorf("init requires --config")
 		}
 		return opts, nil
 	}
@@ -292,6 +305,13 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	if opts.verb == "init" {
+		if initErr := runInit(opts.configPath); initErr != nil {
+			fmt.Fprintf(os.Stderr, "init: %v\n", initErr)
+			os.Exit(1)
+		}
+		return
 	}
 	if opts.verb == "add-catalogs" {
 		count, registerErr := addCatalogs(opts.catalogDir)
