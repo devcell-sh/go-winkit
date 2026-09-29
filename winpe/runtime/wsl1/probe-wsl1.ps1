@@ -52,8 +52,18 @@ if (-not (Test-Path "$target\rootfs")) {
 
 Invoke-WSL -ArgumentList @('-l', '-v') |
     Set-Content (Join-Path $work 'list.out') -Encoding utf8
-Invoke-WSL -ArgumentList @('-d', $distroName, '--exec', '/bin/uname', '-m') |
-    Set-Content (Join-Path $work 'arch.out') -Encoding utf8
+try {
+    Invoke-WSL -ArgumentList @('-d', $distroName, '--exec', '/bin/uname', '-m') |
+        Set-Content (Join-Path $work 'arch.out') -Encoding utf8
+} catch {
+    try {
+        Invoke-WSL -ArgumentList @('-d', $distroName, '--exec',
+            '/nix/var/nix/profiles/default/bin/uname', '-m') |
+            Set-Content (Join-Path $work 'arch.out') -Encoding utf8
+    } catch {
+        Set-Content (Join-Path $work 'arch.out') '' -Encoding utf8
+    }
+}
 
 # Distro-specific identity files: not every rootfs ships /etc/os-release or
 # /etc/alpine-release (nixos/nix is a stripped image with neither). Write

@@ -34,11 +34,17 @@ func encodeDWordLE(v uint32) []byte {
 	return b
 }
 
-func dwordValue(v uint32) regedit.Value {
+func dwordValue(v uint32) regedit.Value { return DwordValue(v) }
+
+// DwordValue constructs a registry DWORD value.
+func DwordValue(v uint32) regedit.Value {
 	return regedit.Value{Type: regedit.TypeDWord, Data: encodeDWordLE(v)}
 }
 
-func szValue(s string) regedit.Value {
+func szValue(s string) regedit.Value { return SzValue(s) }
+
+// SzValue constructs a registry REG_SZ value.
+func SzValue(s string) regedit.Value {
 	return regedit.Value{Type: regedit.TypeString, Data: encodeUTF16LE(s)}
 }
 

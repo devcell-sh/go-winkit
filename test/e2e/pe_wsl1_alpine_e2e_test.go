@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"log/slog"
+
 	"github.com/stretchr/testify/require"
 
 	winkit "github.com/devcell-sh/go-winkit"
@@ -41,7 +43,7 @@ func TestExamplePEWSL1Alpine_E2E(t *testing.T) {
 	exampleDir, err := filepath.Abs(filepath.Join("..", "..", "examples", "pe-wsl1-alpine"))
 	require.NoError(t, err)
 	resultDir := testutil.ResultDir(t)
-	dest := filepath.Join(resultDir, "winkit-core.qcow2")
+	dest := filepath.Join(resultDir, "winkit-pe-wsl.qcow2")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
 	defer cancel()
@@ -135,6 +137,126 @@ func TestExamplePEWSL1Alpine_E2E(t *testing.T) {
 	require.Contains(t, osRelease, "Alpine Linux")
 	arch := strings.ToLower(strings.ReplaceAll(run(`type E:\winkit\arch.out`), "\x00", ""))
 	require.Contains(t, arch, "aarch64")
+}
+
+// TestPEWSL1Alpine_OfflineImport_E2E builds a PE+WSL1 image with the distro
+// rootfs pre-extracted onto the NTFS data disk at build time (offline import).
+// The boot-time wsl --import step should be skipped entirely: the bootstrap
+// detects the pre-formatted WSLROOT volume and the pre-registered Lxss
+// registry entry.
+func TestPEWSL1Alpine_OfflineImport_E2E(t *testing.T) {
+	if os.Getenv("WINKIT_E2E") != "1" {
+		t.Skip("set WINKIT_E2E=1 to run (needs seeded cache, docker, QEMU)")
+	}
+	winISO := windowsISOPath(t)
+	virtioISO := virtioISOPath(t)
+
+	_, opts := loadExampleOpts(t, "pe-wsl1-alpine")
+
+	resultDir := testutil.ResultDir(t)
+	dest := filepath.Join(resultDir, "winkit-pe-wsl-offline.qcow2")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
+	defer cancel()
+
+	workDir, err := os.MkdirTemp(resultDir, "work-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(workDir)
+
+	buildCfg := build.Config{
+		Dest:          dest,
+		CacheDir:      cache.Dir(),
+		WindowsISO:    winISO,
+		VirtIOISO:     virtioISO,
+		WorkDir:       workDir,
+		Logger:        slog.Default(),
+		Accel:         os.Getenv("WINKIT_E2E_ACCEL"),
+		Opts:          opts,
+		OfflineImport: true,
+	}
+	if opts.WSL != nil {
+		buildCfg.WSLImage = opts.WSL.Image
+	}
+
+	t.Log("building PE+WSL1 with offline import")
+	err = winkit.Build(ctx, buildCfg)
+	require.NoError(t, err, "offline-import build failed")
+
+	artifact, err := build.LoadArtifact(dest)
+	require.NoError(t, err)
+	require.NotNil(t, artifact)
+	require.Equal(t, build.ArtifactKindPEWSL1, artifact.Kind)
+	require.FileExists(t, artifact.BootVolume)
+	require.FileExists(t, artifact.DataDisk)
+
+	const peSSHPort = 22123
+	const vmName = "pe-wsl1-alpine-offline-e2e"
+	shotDir := filepath.Join(resultDir, "screenshots")
+	require.NoError(t, os.MkdirAll(shotDir, 0o755))
+	runOut := filepath.Join(resultDir, ".winkit", "run", vmName)
+	qmpSock := qemu.QMPSocketPath(qemu.Spec{
+		VMName: "winkit-" + vmName, QMPSocketDir: runOut,
+	})
+	stopShots := make(chan struct{})
+	shotsDone := make(chan struct{})
+	go qemu.CaptureScreenshots(qmpSock, shotDir, stopShots, shotsDone, t.Logf)
+	defer func() { close(stopShots); <-shotsDone }()
+
+	machine, err := winkit.Start(ctx, winkit.StartOpts{
+		Image:    dest,
+		Name:     vmName,
+		StateDir: filepath.Join(resultDir, "state"),
+		Accel:    os.Getenv("WINKIT_E2E_ACCEL"),
+		SSHPort:  peSSHPort,
+		RDPPort:  25390,
+		VNCPort:  5901,
+	})
+	require.NoError(t, err, "offline-import artifact must boot via winkit.Start")
+	defer machine.Stop()
+
+	if os.Getenv("WINKIT_E2E_TEARDOWN") == "false" {
+		defer holdPEWSL1DebugVM(t, ctx, peSSHPort)
+	}
+
+	client := waitForPEWSL1SSH(t, ctx, peSSHPort)
+	defer client.Close()
+	run := func(command string) string {
+		t.Helper()
+		stdout, stderr, code, runErr := client.Run(ctx, command)
+		require.NoError(t, runErr, "running %q", command)
+		require.Zero(t, code, "%q exited %d\nstdout: %s\nstderr: %s", command, code, stdout, stderr)
+		return string(stdout) + string(stderr)
+	}
+
+	waitForPEWSL1Bootstrap(t, ctx, client)
+	bootstrap := run(`pwsh -NoLogo -NoProfile -NonInteractive -File X:\winkit\status-wsl1.ps1`)
+	require.Contains(t, bootstrap, "WSL1_BOOTSTRAP_OK")
+
+	list := strings.ReplaceAll(run(`type E:\winkit\list.out`), "\x00", "")
+	require.Regexp(t, `(?mi)winkit\s+(stopped|running)\s+1\s*$`, list,
+		"the imported distro must be WSL1: %s", list)
+
+	version := strings.TrimSpace(strings.ReplaceAll(
+		run(`type E:\winkit\alpine-release.out`), "\x00", ""))
+	require.NotEmpty(t, version, "Alpine version must be returned by the WSL1 probe")
+	t.Logf("Alpine version: %s", version)
+
+	osRelease := strings.ReplaceAll(run(`type E:\winkit\os-release.out`), "\x00", "")
+	require.Contains(t, osRelease, "Alpine Linux")
+	arch := strings.ToLower(strings.ReplaceAll(run(`type E:\winkit\arch.out`), "\x00", ""))
+	require.Contains(t, arch, "aarch64")
+
+	winHostname := strings.TrimSpace(run(`hostname`))
+	t.Logf("Windows hostname: %s", winHostname)
+	require.Equal(t, "WINKIT", strings.ToUpper(winHostname),
+		"PE hostname must be 'WINKIT' (set via boot.wim registry patch)")
+
+	wslHostname := strings.TrimSpace(run(`wsl -d winkit -- echo $HOSTNAME`))
+	t.Logf("WSL $HOSTNAME: %s", wslHostname)
+
+	wslMounts := run(`wsl -d winkit -- mount`)
+	t.Logf("WSL mounts:\n%s", wslMounts)
+	require.Contains(t, wslMounts, "/mnt/e", "E:\\ must be drvfs-mounted in WSL")
 }
 
 func waitForPEWSL1Bootstrap(t *testing.T, ctx context.Context, client *gosshd.Client) {

@@ -22,6 +22,7 @@ const (
 var wsl1PERuntimeFS embed.FS
 
 var wsl1PERuntimeFiles = []string{
+	"patch-ramdisk-bpb.ps1",
 	"prepare-wsl1-disk.txt",
 	"relocate-wsl.ps1",
 	"setup-wsl-user.ps1",
