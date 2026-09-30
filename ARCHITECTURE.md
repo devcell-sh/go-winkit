@@ -13,9 +13,18 @@ winkit builds Windows VM images from code. One sentence of contract:
 
 ## What winkit will never own
 
-- **Nix / home-manager content.** A nix-flavored WSL rootfs is consumer
-  content: build it outside, pass it as `wsl.image`, activate it with
-  `wsl`-phase hooks. (devcell does exactly this.)
+- **Nix / home-manager content.** winkit owns the `nix` WSL image
+  recipe (`wsl.NixRecipe`: the rootfs Dockerfile, the in-distro sshd,
+  and the home-manager activation run while the rootfs is built) and
+  embeds a minimal default flake plus `home.nix` (bash, git and a few
+  base CLI tools) used when no configuration is given. The real
+  home-manager configuration is consumer content: the consumer supplies
+  `WSLConfig.NixHome` (`wsl.nixhome` in `winkit.yaml`, or
+  `WINKIT_NIXHOME` for the CLI), either a local directory holding a
+  flake that exposes `homeConfigurations.<user>` or a remote flake ref,
+  plus any `wsl`-phase hooks and s6 services. winkit does not grow its
+  default into a package set or module library. (devcell passes
+  `buildopts.WSLConfig{Image: "nix", NixHome: ...}`.)
 - **Runtime session management.** `winkit start/stop/status` is a thin
   debug CLI over the public `winkit.Start`/`Status` API — proof the API
   is sufficient. Cells, sessions, restart policy, project sync belong to
@@ -33,6 +42,7 @@ Consumers embed the root package:
 |---|---|
 | `winkit.Build(ctx, build.Config)` | Full build, dispatching PE / WSL / base on `Config.Opts` |
 | `winkit.Start(ctx, StartOpts)` / `winkit.Status(dir)` | Boot and track a built image (`vm.VM` handle) |
+| `media.FetchWindowsISO(ctx, media.FetchOptions)` / `media.FetchVirtioISO(ctx, media.FetchOptions)` | Fetch install media into the cache: MCT catalog first, UUP dump boot-only for build pins or when MCT fails (`FetchResult` reports source and boot-only); virtio-win drivers from the same options. The CLI's own fetch policy |
 | `build/buildopts` | The consumer-facing nouns: `From`, `Features`, `Hooks` (specialize/oobe/boot/wsl), `WSLConfig`, `Ports` |
 | `vm/qemu.Monitor` + `ScreenStatePoller` | Observability loop: stall/poll callbacks instead of log parsing |
 | `s6` | Service-dir model for `wsl.services` |

@@ -17,9 +17,8 @@ import (
 	"github.com/devcell-sh/go-winkit/build/imageformat"
 	"github.com/devcell-sh/go-winkit/cache"
 	"github.com/devcell-sh/go-winkit/internal/config"
-	"github.com/devcell-sh/go-winkit/media/mctcatalog"
+	"github.com/devcell-sh/go-winkit/media"
 	"github.com/devcell-sh/go-winkit/media/uupdump"
-	"github.com/devcell-sh/go-winkit/media/virtio"
 	"github.com/devcell-sh/go-winkit/s6"
 	"github.com/devcell-sh/go-winkit/vm/qemu"
 	"github.com/devcell-sh/go-winkit/vm/vmstate"
@@ -453,14 +452,9 @@ func specFromFrom(from string) (uupdump.MediaSpec, error) {
 
 // ensureCachedISOs returns the cached Windows and virtio-win ISO paths,
 // downloading whatever is missing. With noCache the cached copies are
-// removed first so the fetchers redownload.
-//
-// Lane routing: the default (no --build pin) fetches from the MCT catalog,
-// which is the only source that produces a complete, self-contained install
-// image. A --build pin routes to UUP dump in boot-only mode (the pinned
-// build's ESDs cannot produce a complete install.wim, but boot.wim always
-// exports clean). If the MCT catalog is unreachable, the default lane falls
-// back to UUP dump boot-only with a warning.
+// removed first so the fetchers redownload. Lane routing (MCT catalog
+// first, UUP dump boot-only for build pins and as the fallback) is the
+// public media.FetchWindowsISO policy.
 func ensureCachedISOs(cmd *cobra.Command, cacheDir string, spec uupdump.MediaSpec, noCache bool, ui *runUI) (winISO, virtioISO string, err error) {
 	if noCache {
 		clearCache(cacheDir, func(format string, a ...any) {
@@ -468,10 +462,17 @@ func ensureCachedISOs(cmd *cobra.Command, cacheDir string, spec uupdump.MediaSpe
 		})
 	}
 
-	winISO, err = fetchWindowsISO(cmd, cacheDir, spec, ui)
+	res, err := media.FetchWindowsISO(cmd.Context(), media.FetchOptions{
+		CacheDir:    cacheDir,
+		Spec:        spec,
+		Logger:      ui.Logger,
+		OnFileStart: func(name string) { ui.ItemStart(itemName(name)) },
+		OnFileDone:  func(name string, _ int64) { ui.ItemDone(itemName(name)) },
+	})
 	if err != nil {
 		return "", "", err
 	}
+	winISO = res.Path
 
 	virtioISO, err = ensureVirtioISO(cmd, cacheDir, ui)
 	if err != nil {
@@ -488,7 +489,7 @@ func ensureVirtioISO(cmd *cobra.Command, cacheDir string, ui *runUI) (string, er
 	virtioISO := cfg.VirtIOISO()
 	if _, err := os.Stat(virtioISO); err != nil {
 		ui.Logger.Info("virtio-win ISO not cached — fetching")
-		fetched, err := virtio.FetchISO(cmd.Context(), virtio.FetchConfig{
+		fetched, err := media.FetchVirtioISO(cmd.Context(), media.FetchOptions{
 			CacheDir: cacheDir,
 			Logger:   ui.Logger,
 		})
@@ -498,61 +499,6 @@ func ensureVirtioISO(cmd *cobra.Command, cacheDir string, ui *runUI) (string, er
 		return fetched, nil
 	}
 	return virtioISO, nil
-}
-
-// fetchWindowsISO routes to the appropriate media source based on the spec.
-func fetchWindowsISO(cmd *cobra.Command, cacheDir string, spec uupdump.MediaSpec, ui *runUI) (string, error) {
-	r, err := spec.Resolve()
-	if err != nil {
-		return "", fmt.Errorf("resolving media spec: %w", err)
-	}
-
-	if r.BuildPinned {
-		ui.Logger.Info("build pinned: using uupdump lane (boot-only)",
-			"build", spec.Build)
-		return fetchViaUUPDump(cmd, cacheDir, spec, ui, true)
-	}
-
-	// Default lane: MCT catalog (complete media, GA discovery built in).
-	ui.Logger.Info("using mct lane (complete install media)")
-	lang := spec.Language
-	if lang == "" {
-		lang = "en-us"
-	}
-	edition := spec.Edition
-	if edition == "" {
-		edition = "Professional"
-	}
-	isoPath, err := mctcatalog.FetchWindowsISO(cmd.Context(), mctcatalog.FetchConfig{
-		CacheDir: cacheDir,
-		Language: lang,
-		Edition:  edition,
-		LogFunc: func(format string, a ...any) {
-			ui.Logger.Info(fmt.Sprintf(format, a...))
-		},
-	})
-	if err == nil {
-		return isoPath, nil
-	}
-
-	ui.Logger.Warn("mct catalog unavailable, falling back to uupdump boot-only",
-		"error", err)
-	return fetchViaUUPDump(cmd, cacheDir, spec, ui, true)
-}
-
-func fetchViaUUPDump(cmd *cobra.Command, cacheDir string, spec uupdump.MediaSpec, ui *runUI, bootOnly bool) (string, error) {
-	isoPath, err := uupdump.FetchWindowsISO(cmd.Context(), uupdump.FetchConfig{
-		CacheDir:    cacheDir,
-		Spec:        spec,
-		Logger:      ui.Logger,
-		OnFileStart: func(name string) { ui.ItemStart(itemName(name)) },
-		OnFileDone:  func(name string, _ int64) { ui.ItemDone(itemName(name)) },
-		BootOnly:    bootOnly,
-	})
-	if err != nil {
-		return "", fmt.Errorf("fetching Windows ISO: %w", err)
-	}
-	return isoPath, nil
 }
 
 // clearCache removes every fetch artifact so the next build redownloads
