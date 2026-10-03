@@ -1,0 +1,13 @@
+#!/bin/sh
+# Virtual X display :99, the same display number devcell's 50-gui.sh uses.
+# Runs as the distro user so IceWM and x11vnc (same user) can connect.
+# PATH already carries the nix profiles: /bin/s6-init sets it before
+# exec'ing s6-svscan, and run scripts inherit it.
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+export HOME=/home/winkit
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+exec s6-setuidgid winkit \
+  Xvfb :99 -screen 0 1600x1000x24 -dpi 96 +extension GLX +render +iglx 2>&1

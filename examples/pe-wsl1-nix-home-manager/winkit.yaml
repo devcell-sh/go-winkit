@@ -1,0 +1,22 @@
+# WinPE + WSL1 with a Nix rootfs whose home-manager configuration comes
+# from https://github.com/devcell-sh/home: the same desktop module devcell
+# uses (IceWM, Xvfb, x11vnc), supervised by s6 inside the distro.
+#
+# Build:  winkit build --file examples/pe-wsl1-nix-home-manager winkit-core.qcow2
+# Boot:   winkit start winkit-core.qcow2
+# Shell:  winkit ssh winkit-core
+# Desktop: VNC client to 127.0.0.1:25900
+
+from: windows/11-pro-arm64
+pe: true
+wsl:
+  image: nix
+  # Local flake that composes homeConfigurations.winkit out of the
+  # devcell-sh/home modules. Relative to this file.
+  nixhome: ./nixhome
+  # s6 service dirs copied into /etc/s6/services of the distro and
+  # started by s6-svscan on every boot. Relative to this file.
+  services: ./s6
+ports:
+  # host:guest. x11vnc inside the distro listens on 5900.
+  forward: ["25900:5900"]

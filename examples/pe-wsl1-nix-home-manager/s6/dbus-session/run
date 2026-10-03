@@ -1,0 +1,16 @@
+#!/bin/sh
+# Session D-Bus for the desktop user. StatusNotifier (SNI) tray icons and
+# most GTK apps expect it; devcell starts the same bus in its GUI fragment.
+# The socket path is fixed so the other services can export it. The config
+# file is passed explicitly, as devcell does: "--session" exits 1 without
+# a message in this build.
+[ -f /etc/machine-id ] || dbus-uuidgen > /etc/machine-id 2>/dev/null || true
+export HOME=/home/winkit
+export XDG_RUNTIME_DIR=/run/user/1000
+mkdir -p "$XDG_RUNTIME_DIR"
+chown 1000:1000 "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+rm -f "$XDG_RUNTIME_DIR/bus"
+exec s6-setuidgid winkit \
+  dbus-daemon --config-file="$HOME/.nix-profile/share/dbus-1/session.conf" \
+    --nofork --nopidfile --address="unix:path=$XDG_RUNTIME_DIR/bus" 2>&1
