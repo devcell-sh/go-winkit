@@ -1,0 +1,12 @@
+#!/bin/sh
+# IceWM session on the Xvfb display. s6 restarts it if it exits, and the
+# loop below waits for the X socket so a restart race with xvfb is harmless.
+export HOME=/home/winkit
+export DISPLAY=:99
+export XDG_RUNTIME_DIR=/run/user/1000
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+i=0
+until [ -S /tmp/.X11-unix/X99 ] || [ $i -ge 100 ]; do
+  sleep 0.1; i=$((i+1))
+done
+exec s6-setuidgid winkit icewm-session 2>&1

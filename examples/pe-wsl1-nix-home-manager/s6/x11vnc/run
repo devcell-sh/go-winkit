@@ -1,0 +1,14 @@
+#!/bin/sh
+# VNC server for display :99 on guest port 5900. WSL1 shares the Windows
+# network stack, so the QEMU forward declared in winkit.yaml
+# (ports.forward "25900:5900") reaches it: connect a VNC client to
+# 127.0.0.1:25900. -q keeps x11vnc's per-connection chatter out of the
+# serial log that winkit-service relays to the host.
+export HOME=/home/winkit
+export DISPLAY=:99
+i=0
+until [ -S /tmp/.X11-unix/X99 ] || [ $i -ge 100 ]; do
+  sleep 0.1; i=$((i+1))
+done
+exec s6-setuidgid winkit \
+  x11vnc -display :99 -forever -shared -nopw -noxdamage -q -rfbport 5900 -listen 0.0.0.0 2>&1

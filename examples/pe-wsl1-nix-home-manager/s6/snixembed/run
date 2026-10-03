@@ -1,0 +1,12 @@
+#!/bin/sh
+# SNI to XEmbed proxy: makes StatusNotifier tray icons show up in IceWM's
+# XEmbed tray. Needs the X display and the session bus.
+export HOME=/home/winkit
+export DISPLAY=:99
+export XDG_RUNTIME_DIR=/run/user/1000
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+i=0
+until { [ -S /tmp/.X11-unix/X99 ] && [ -S "$XDG_RUNTIME_DIR/bus" ]; } || [ $i -ge 100 ]; do
+  sleep 0.1; i=$((i+1))
+done
+exec s6-setuidgid winkit snixembed 2>&1
