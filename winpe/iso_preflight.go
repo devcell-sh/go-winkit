@@ -215,6 +215,44 @@ func LoadWinPEViofsDrivers(virtioISO string) (map[string][]byte, error) {
 	return nil, fmt.Errorf("no ARM64 viofs driver in %s:\n  %s", virtioISO, strings.Join(probeErrs, "\n  "))
 }
 
+var viogpudoISODirs = []string{
+	"viogpudo/w11/ARM64",
+	"viogpudo/2k25/ARM64",
+	"viogpudo/w10/ARM64",
+}
+
+const winPEViogpudoDir = "/drivers/viogpudo/"
+
+// LoadWinPEViogpudoDrivers extracts the ARM64 virtio-gpu (viogpudo) WDDM
+// display driver from the virtio-win ISO. When loaded alongside a
+// virtio-gpu-pci QEMU device, it registers a DXGI adapter that enables
+// DWM composition via WARP software rendering.
+func LoadWinPEViogpudoDrivers(virtioISO string) (map[string][]byte, error) {
+	var probeErrs []string
+	for _, dir := range viogpudoISODirs {
+		inf, err := isokit.ReadFileFromISO(virtioISO, "/"+dir+"/viogpudo.inf")
+		if err != nil {
+			probeErrs = append(probeErrs, fmt.Sprintf("%s: %v", dir, err))
+			continue
+		}
+		drivers := map[string][]byte{winPEViogpudoDir + "viogpudo.inf": inf}
+		for _, name := range []string{"viogpudo.sys", "viogpudo.cat"} {
+			data, err := isokit.ReadFileFromISO(virtioISO, "/"+dir+"/"+name)
+			if err != nil {
+				return nil, fmt.Errorf("reading %s/%s: %w", dir, name, err)
+			}
+			drivers[winPEViogpudoDir+name] = data
+		}
+		for _, name := range []string{"vgpusrv.exe", "viogpuap.exe", "viogpures.exe"} {
+			if data, err := isokit.ReadFileFromISO(virtioISO, "/"+dir+"/"+name); err == nil {
+				drivers[winPEViogpudoDir+name] = data
+			}
+		}
+		return drivers, nil
+	}
+	return nil, fmt.Errorf("no ARM64 viogpudo driver in %s:\n  %s", virtioISO, strings.Join(probeErrs, "\n  "))
+}
+
 var netkvmISODirs = []string{
 	"NetKVM/w11/ARM64",
 	"NetKVM/2k25/ARM64",

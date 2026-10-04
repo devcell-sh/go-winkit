@@ -350,6 +350,207 @@ func containsAny(value string, keywords []string) bool {
 	return false
 }
 
+// TransferDWMFiles extracts the DWM compositor and DirectX rendering
+// pipeline from install.wim (image 1) and injects them into boot.wim
+// (image 2). Stock WinPE carries only a dwmapi.dll stub; this transplant
+// adds the full compositor so DWM can be started for DirectComposition,
+// which WebView2 and other Chromium-based renderers require.
+func TransferDWMFiles(installWimPath, bootWimPath string) ([]string, error) {
+	if !wimlib.Available() {
+		return nil, fmt.Errorf("wimlib not available: build with CGO_ENABLED=1 and install libwim")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "dwm-extract-*")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	src, err := wimlib.OpenWIM(installWimPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening install.wim: %w", err)
+	}
+	defer src.Close()
+
+	for _, wp := range DWMSystem32Paths {
+		if err := src.ExtractPaths(1, tmpDir, []string{wp}); err != nil {
+			continue
+		}
+	}
+
+	for _, wp := range DWMDriverPaths {
+		if err := src.ExtractPaths(1, tmpDir, []string{wp}); err != nil {
+			continue
+		}
+	}
+
+	for _, wp := range DWMINFPaths {
+		if err := src.ExtractPaths(1, tmpDir, []string{wp}); err != nil {
+			continue
+		}
+	}
+
+	// Extract display driver packages from the DriverStore. msdv.inf
+	// (needed by VioGpuDod Include=msdv.inf) does not exist at
+	// \Windows\INF\ on ARM64; it is only in the DriverStore
+	// FileRepository. BasicRender and BasicDisplay packages ensure the
+	// software adapters can be properly installed by PnP.
+	driverStoreEntries, err := src.ListChildren(1, `\Windows\System32\DriverStore\FileRepository`)
+	if err == nil {
+		for _, entry := range driverStoreEntries {
+			el := strings.ToLower(entry)
+			for _, kw := range DWMDriverStoreKeywords {
+				if strings.Contains(el, kw) {
+					wimDir := `\Windows\System32\DriverStore\FileRepository\` + entry
+					_ = src.ExtractPaths(1, tmpDir, []string{wimDir})
+					break
+				}
+			}
+		}
+	}
+
+	// Discover and extract DWM WinSxS component directories.
+	winsxsEntries, err := src.ListChildren(1, `\Windows\WinSxS`)
+	if err != nil {
+		return nil, fmt.Errorf("listing WinSxS: %w", err)
+	}
+	for _, entry := range winsxsEntries {
+		el := strings.ToLower(entry)
+		if !containsAny(el, DWMWinSxSKeywords) {
+			continue
+		}
+		wimDir := `\Windows\WinSxS\` + entry
+		if err := src.ExtractPaths(1, tmpDir, []string{wimDir}); err != nil {
+			continue
+		}
+	}
+
+	// Extract servicing metadata so CBS can recognize the components.
+	metadataSets := []struct {
+		dir      string
+		keywords []string
+	}{
+		{dir: `\Windows\WinSxS\Manifests`, keywords: DWMWinSxSKeywords},
+		{dir: `\Windows\servicing\Packages`, keywords: DWMServicingPackageKeywords},
+	}
+	for _, set := range metadataSets {
+		entries, listErr := src.ListChildren(1, set.dir)
+		if listErr != nil {
+			continue
+		}
+		for _, entry := range entries {
+			lower := strings.ToLower(entry)
+			if !containsAny(lower, set.keywords) {
+				continue
+			}
+			_ = src.ExtractPaths(1, tmpDir, []string{set.dir + `\` + entry})
+		}
+	}
+
+	// Extract WinSxS catalogs that contain the monitor driver so Code
+	// Integrity validates monitor.sys during PnP installation. For
+	// PE+WSL1 builds the WSL1 transplant copies all catalogs; this
+	// ensures DWM-only builds also get the required catalogs.
+	catalogDir := `\Windows\WinSxS\Catalogs`
+	catalogEntries, listErr := src.ListChildren(1, catalogDir)
+	if listErr == nil {
+		if extractErr := src.ExtractPaths(1, tmpDir, []string{catalogDir}); extractErr == nil {
+			if err := stageDWMCodeIntegrityCatalogs(tmpDir); err != nil {
+				return nil, fmt.Errorf("staging DWM catalogs for Code Integrity: %w", err)
+			}
+		}
+		_ = catalogEntries
+	}
+
+	if err := materializeDCSFiles(tmpDir); err != nil {
+		return nil, fmt.Errorf("materializing DWM component payloads: %w", err)
+	}
+
+	src.Close()
+
+	var injections []string
+	err = filepath.Walk(tmpDir, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() {
+			return werr
+		}
+		rel, _ := filepath.Rel(tmpDir, path)
+		wimTarget := `\` + strings.ReplaceAll(filepath.ToSlash(rel), `/`, `\`)
+		injections = append(injections, wimTarget)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking extracted DWM files: %w", err)
+	}
+	if len(injections) == 0 {
+		return nil, fmt.Errorf("no DWM files found in install.wim")
+	}
+
+	dst, err := wimlib.OpenWIM(bootWimPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening boot.wim: %w", err)
+	}
+	defer dst.Close()
+
+	windowsTree := filepath.Join(tmpDir, "Windows")
+	if err := dst.UpdateImageAddTree(2, windowsTree, `\Windows`); err != nil {
+		return nil, fmt.Errorf("injecting DWM Windows tree into boot.wim: %w", err)
+	}
+
+	if err := dst.Overwrite(); err != nil {
+		return nil, fmt.Errorf("overwriting boot.wim: %w", err)
+	}
+	return injections, nil
+}
+
+var dwmCatalogMemberNames = []string{
+	"monitor.sys",
+	"monitor.inf",
+	"basicdisplay.sys",
+	"dwm.exe",
+	"dwmcore.dll",
+	"dcomp.dll",
+}
+
+func stageDWMCodeIntegrityCatalogs(root string) error {
+	sourceDir := filepath.Join(root, "Windows", "WinSxS", "Catalogs")
+	targetDir := filepath.Join(root, filepath.FromSlash(codeIntegrityCatalogDir))
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", targetDir, err)
+	}
+
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		sourcePath := filepath.Join(sourceDir, entry.Name())
+		data, err := os.ReadFile(sourcePath)
+		if err != nil {
+			continue
+		}
+		if catalogContainsAnyMember(data, dwmCatalogMemberNames) {
+			targetPath := filepath.Join(targetDir, entry.Name())
+			if err := os.Link(sourcePath, targetPath); err != nil {
+				if copyErr := copyFile(sourcePath, targetPath); copyErr != nil {
+					return fmt.Errorf("staging catalog %s: %w", entry.Name(), copyErr)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o644)
+}
+
 // PatchDevcellWim applies registry patches to an on-disk WIM file (typically
 // winkit.wim after DISM offline servicing). This is the host-side post-step
 // that sets correct Start values for services created or updated by DISM.

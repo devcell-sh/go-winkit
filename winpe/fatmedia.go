@@ -56,8 +56,9 @@ func PadForFAT(data []byte) []byte {
 	return out
 }
 
-// GuestSerialPort is the COM2 device path used inside the guest for the
-// unified structured/progress serial stream. COM2 is a PCI 16550 UART
-// backed by build.jsonl on the host; it uses the inbox serial.sys driver,
-// available in all Windows phases without drvload.
-const GuestSerialPort = `\\.\COM2`
+// GuestSerialPort is the virtio-serial device path used inside the guest
+// for the unified structured/progress serial stream. The vioserial driver
+// (drvloaded at boot) creates this device from the virtserialport QEMU
+// device named "winkit.structured.0". ARM64 Windows has no inbox serial.sys
+// for PCI 16550 UARTs, so virtio-serial is the only working transport.
+const GuestSerialPort = `\\.\Global\winkit.structured.0`

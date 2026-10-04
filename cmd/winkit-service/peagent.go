@@ -194,13 +194,13 @@ func readFileShared(path string) ([]byte, error) {
 }
 
 // defaultSerialPorts is the list of device paths the pe-agent tries when
-// no explicit --log-serial is given. COM2 is the pci-serial device backed
-// by build.jsonl on the host; COM1 is the PL011 UART (UEFI/serial.log).
+// no explicit --log-serial is given. The virtio-serial port is the
+// primary transport (backed by guest.jsonl on the host); COM ports are
+// fallbacks for full installs where vioserial may not be loaded.
 var defaultSerialPorts = []string{
+	`\\.\Global\winkit.structured.0`,
 	`\\.\COM2`,
 	`\\.\COM3`,
-	`\\.\COM4`,
-	`\\.\COM5`,
 }
 
 // lazySerialWriter probes a list of serial device paths and opens the
