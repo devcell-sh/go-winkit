@@ -22,6 +22,7 @@ import (
 	"github.com/devcell-sh/go-winkit/s6"
 	"github.com/devcell-sh/go-winkit/vm/qemu"
 	"github.com/devcell-sh/go-winkit/vm/vmstate"
+	"github.com/devcell-sh/go-winkit/wsl"
 )
 
 // buildAccels lists accelerators valid for the build VM.
@@ -94,6 +95,10 @@ func newBuildCmd() *cobra.Command {
 			}
 			if cfgPath != "" {
 				ui.Logger.Debug("loaded config", "path", cfgPath)
+				// Relative wsl.services / wsl.nixhome are relative to the
+				// config file, so `winkit build --file examples/<dir>` works
+				// from any working directory.
+				rebaseWSLPaths(cfg, filepath.Dir(cfgPath))
 			}
 
 			// Apply CLI flag overrides.
@@ -582,4 +587,18 @@ func confirm(cmd *cobra.Command, prompt string) bool {
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes"
+}
+
+// rebaseWSLPaths resolves the local-path fields of cfg.WSL against base.
+// Remote flake refs and absolute paths pass through untouched.
+func rebaseWSLPaths(cfg *config.Config, base string) {
+	if cfg == nil || cfg.WSL == nil {
+		return
+	}
+	if p := cfg.WSL.Services; p != "" && !filepath.IsAbs(p) {
+		cfg.WSL.Services = filepath.Join(base, p)
+	}
+	if p := cfg.WSL.NixHome; p != "" && !filepath.IsAbs(p) && !wsl.IsFlakeRef(p) {
+		cfg.WSL.NixHome = filepath.Join(base, p)
+	}
 }

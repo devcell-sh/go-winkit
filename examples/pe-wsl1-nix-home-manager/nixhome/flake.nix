@@ -32,7 +32,10 @@
           # carries both; a composed flake has to say so.
           # gnused and gawk: ~/.icewm/startup (from the home desktop module)
           # shells out to sed, and nothing else in the profile provides it.
-          home.packages = [ pkgs.sudo pkgs.openssh pkgs.gnused pkgs.gawk ];
+          home.packages = [
+            pkgs.sudo pkgs.openssh pkgs.gnused pkgs.gawk
+            pkgs.chromium
+          ];
 
           # The desktop module as devcell's ultimate stack configures it:
           # IceWM + Xvfb + x11vnc + fonts. The heavy optional parts stay

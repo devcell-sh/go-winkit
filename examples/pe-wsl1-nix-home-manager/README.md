@@ -90,3 +90,21 @@ are now baked into the templates: glibc needs `/etc/nsswitch.conf` or
 user; nixpkgs dbus wants an explicit `--config-file`; WSL1 under WinPE
 writes a `resolv.conf` with no nameservers, so `s6-init` fills it from the
 DNS list the bootstrap exports to the data disk.
+
+## Windows apps on the PE console
+
+ARM64 Win32 binaries run from either shell and draw on the PE console
+(QEMU display, host port 5900), not on the IceWM display. Put them on the
+data disk, which survives reboots, and run them by path:
+
+```sh
+winkit cp putty.exe E:\apps\putty.exe       # from the host
+winkit ssh winkit-pe-wsl -- E:\apps\putty.exe
+/mnt/e/apps/putty.exe                        # from the WSL shell, via interop
+```
+
+No x64 or x86 emulation exists in ARM64 WinPE, and there is no Windows
+Installer service: use portable builds, or installers with silent flags
+(`7z2501-arm64.exe /S /D=E:\apps\7zip` works). init grants the winkit
+account access to WinSta0 and the Default desktop; without that ACE,
+windows created by processes it spawns never paint.

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Xvfb went away: its clients keep a connection to a dead server. x11vnc in
+# particular kept serving a stale framebuffer after an Xvfb restart. Bounce
+# the display clients so they reattach to the new server s6 is about to
+# start. s6-svc -t is a no-op for a service that is not running.
+for svc in x11vnc window-manager snixembed; do
+  s6-svc -t /etc/s6/services/$svc 2>/dev/null
+done

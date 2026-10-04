@@ -8,7 +8,7 @@ to the library.
 ```sh
 winkit build --file examples/pe-wsl1-alpine winkit-core.qcow2
 winkit start winkit-core.qcow2
-ssh -p 20022 admin@127.0.0.1
+winkit ssh winkit-core
 ```
 
 Inside the guest, verify the imported distro and Alpine release through the
