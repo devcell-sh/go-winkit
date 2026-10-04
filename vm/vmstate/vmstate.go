@@ -23,8 +23,10 @@ type State struct {
 	SSHPort   uint16    `json:"ssh_port,omitempty"`
 	RDPPort   uint16    `json:"rdp_port,omitempty"`
 	VNCPort   uint16    `json:"vnc_port,omitempty"`
-	Accel     string    `json:"accel,omitempty"`
-	OutputDir string    `json:"output_dir,omitempty"`
+	// Forwards are the extra host:guest TCP forwards the VM was started with.
+	Forwards  []string `json:"forwards,omitempty"`
+	Accel     string   `json:"accel,omitempty"`
+	OutputDir string   `json:"output_dir,omitempty"`
 }
 
 // DefaultDir returns the default state directory (~/.winkit/run/).

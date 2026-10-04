@@ -20,8 +20,9 @@ from: windows/11-pro-arm64
 #
 # wsl:
 #   image: alpine
-#   Full disk install with WSL enabled and a distro imported.
-#   Cannot be combined with pe. Supported images:
+#   A WSL1 distro imported into the guest: a full install with WSL
+#   enabled, or combined with pe for a WinPE boot volume plus a data
+#   disk carrying the distro. Supported images:
 #     alpine  — docker-built Alpine with WSL plumbing (default)
 #     nix     — docker-built Nix + home-manager environment
 #     <docker ref> — any docker image (ubuntu:24.04, ghcr.io/org/img:tag),
@@ -124,6 +125,8 @@ from: windows/11-pro-arm64
 #   rdp: 23389       # guest :3389
 #   gossh: 20022     # gosshd provisioning channel, guest :2222
 #   openssh: 20122   # Windows OpenSSH, guest :22
+#   # Extra host:guest TCP forwards, e.g. a VNC server inside the guest.
+#   forward: ["25900:5900"]
 
 # Emit a vagrant-qemu Vagrantfile next to the built image (same as
 # build --vagrant). Boot the result with:

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/devcell-sh/go-winkit/build/buildopts"
 )
 
 type CommandEntry struct {
@@ -74,6 +76,15 @@ type PortsConfig struct {
 	RDP     int `yaml:"rdp"`
 	Gossh   int `yaml:"gossh"`
 	OpenSSH int `yaml:"openssh"`
+	// Forward lists extra host→guest TCP forwards as "host:guest", e.g.
+	// "25900:5900" for a VNC server running inside the guest.
+	Forward []string `yaml:"forward"`
+}
+
+// ParseForward splits a "host:guest" forward spec into its two ports.
+func ParseForward(spec string) (host, guest int, err error) {
+	h, g, err := buildopts.ParseForward(spec)
+	return int(h), int(g), err
 }
 
 type Config struct {
@@ -242,6 +253,11 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.Ports != nil {
+		for _, f := range c.Ports.Forward {
+			if _, _, err := ParseForward(f); err != nil {
+				return fmt.Errorf("ports.%w", err)
+			}
+		}
 		seen := map[int]string{}
 		for name, p := range map[string]int{
 			"rdp": c.Ports.RDP, "gossh": c.Ports.Gossh, "openssh": c.Ports.OpenSSH,

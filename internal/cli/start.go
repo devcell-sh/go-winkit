@@ -2,16 +2,19 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	winkit "github.com/devcell-sh/go-winkit"
-	"github.com/devcell-sh/go-winkit/gosshd"
+	"github.com/devcell-sh/go-winkit/internal/config"
+	"github.com/devcell-sh/go-winkit/vm"
 	"github.com/devcell-sh/go-winkit/vm/vmstate"
 )
 
@@ -28,6 +31,9 @@ func newStartCmd() *cobra.Command {
 		sshPort    uint16
 		rdpPort    uint16
 		stateDir   string
+		noWait     bool
+		waitFor    time.Duration
+		forwards   []string
 	)
 
 	cmd := &cobra.Command{
@@ -37,8 +43,10 @@ func newStartCmd() *cobra.Command {
 			"When no image is given, discovers the build output in\n" +
 			"the current directory (winkit-full.qcow2, etc.).\n" +
 			"Loads defaults from winkit.yaml if present.\n" +
-			"Prints connection info (SSH, RDP, VNC ports) and writes\n" +
-			"state so `winkit status` and `winkit stop` can manage it.",
+			"Waits until the guest accepts SSH, then prints connection\n" +
+			"info (SSH, RDP, VNC ports) and writes state so `winkit status`\n" +
+			"and `winkit stop` can manage it. --no-wait returns as soon as\n" +
+			"the VM process is up.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var imagePath string
@@ -83,6 +91,18 @@ func newStartCmd() *cobra.Command {
 			if hostname == "" {
 				hostname = cfg.Hostname
 			}
+			// Extra forwards: winkit.yaml ports.forward plus --forward flags.
+			var extraForwards []vm.PortForward
+			if cfg.Ports != nil {
+				forwards = append(cfg.Ports.Forward, forwards...)
+			}
+			for _, spec := range forwards {
+				h, g, err := config.ParseForward(spec)
+				if err != nil {
+					return err
+				}
+				extraForwards = append(extraForwards, vm.PortForward{Host: uint16(h), Guest: uint16(g)})
+			}
 
 			var ctx context.Context
 			var stop context.CancelFunc
@@ -92,6 +112,9 @@ func newStartCmd() *cobra.Command {
 				ctx, stop = context.WithCancel(context.Background())
 			}
 			defer stop()
+
+			ui := newRunUI(cmd)
+			ui.Logger.Info("starting VM", "name", name)
 
 			machine, err := winkit.Start(ctx, winkit.StartOpts{
 				Image:      absImage,
@@ -104,20 +127,67 @@ func newStartCmd() *cobra.Command {
 				SSHPort:    sshPort,
 				RDPPort:    rdpPort,
 				VNCPort:    vncPort,
+				Forwards:   extraForwards,
 				Foreground: foreground,
 			})
 			if err != nil {
+				ui.Finish(err)
 				return err
 			}
 			outDir := machine.OutputDir()
 
+			// Hold the terminal until the guest answers SSH. A detached VM
+			// keeps running if the user interrupts the wait; only the wait
+			// itself is abandoned.
+			var waitErr error
+			if !noWait {
+				sshAddr := fmt.Sprintf("127.0.0.1:%d", sshPort)
+				ui.Logger.Info("waiting for SSH", "addr", sshAddr)
+				waitCtx, cancelWait := signal.NotifyContext(ctx, os.Interrupt)
+				if waitFor > 0 {
+					var cancelTimeout context.CancelFunc
+					waitCtx, cancelTimeout = context.WithTimeout(waitCtx, waitFor)
+					defer cancelTimeout()
+				}
+				waitErr = waitForSSH(waitCtx, sshAddr, machine.Done(), func(elapsed time.Duration) {
+					ui.Progress(formatElapsed(elapsed))
+				})
+				cancelWait()
+				switch {
+				case waitErr == nil:
+				case errors.Is(waitErr, errVMExited):
+					vmstate.Remove(stateDir, name)
+					ui.Finish(waitErr)
+					return fmt.Errorf("%w; see %s", waitErr, outDir)
+				case errors.Is(waitErr, context.DeadlineExceeded):
+					ui.Logger.Warn("SSH not reachable yet; VM left running", "waited", waitFor.String())
+				case errors.Is(waitErr, context.Canceled) && !foreground:
+					ui.Logger.Warn("wait interrupted; VM left running")
+				}
+			}
+			ui.Finish(nil)
+
 			fmt.Fprintf(cmd.OutOrStdout(), "VM %q started (PID %d)\n", name, machine.PID())
 			fmt.Fprintf(cmd.OutOrStdout(), "  Image:  %s\n", absImage)
-			fmt.Fprintf(cmd.OutOrStdout(), "  SSH:    ssh -p %d %s@127.0.0.1\n", sshPort, gosshd.DefaultUser)
+			fmt.Fprintf(cmd.OutOrStdout(), "  SSH:    winkit ssh %s\n", name)
 			fmt.Fprintf(cmd.OutOrStdout(), "  RDP:    127.0.0.1:%d\n", rdpPort)
 			fmt.Fprintf(cmd.OutOrStdout(), "  VNC:    127.0.0.1:%d\n", vncPort)
-			fmt.Fprintf(cmd.OutOrStdout(), "  Logs:   %s\n", outDir)
-			fmt.Fprintf(cmd.OutOrStdout(), "  Stop:   winkit stop\n")
+			if st, err := vmstate.Load(stateDir, name); err == nil && st != nil {
+				for _, spec := range st.Forwards {
+					if h, g, perr := config.ParseForward(spec); perr == nil {
+						fmt.Fprintf(cmd.OutOrStdout(), "  Fwd:    127.0.0.1:%d -> guest :%d\n", h, g)
+					}
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "  Logs:   winkit logs %s\n", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "  Stop:   winkit stop %s\n", name)
+
+			if waitErr != nil && !foreground {
+				if errors.Is(waitErr, context.DeadlineExceeded) {
+					return fmt.Errorf("SSH not reachable after %s (VM still running; use --wait-timeout to wait longer)", waitFor)
+				}
+				return nil
+			}
 
 			if foreground {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nVM running in foreground. Press Ctrl+C to stop.\n")
@@ -156,6 +226,9 @@ func newStartCmd() *cobra.Command {
 	cmd.Flags().Uint16Var(&sshPort, "ssh-port", 20022, "host SSH port")
 	cmd.Flags().Uint16Var(&rdpPort, "rdp-port", 23389, "host RDP port")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "state directory (default ~/.winkit/run/)")
+	cmd.Flags().StringArrayVar(&forwards, "forward", nil, "extra host:guest TCP forward (repeatable; adds to winkit.yaml ports.forward)")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return as soon as the VM process is up, without waiting for SSH")
+	cmd.Flags().DurationVar(&waitFor, "wait-timeout", 10*time.Minute, "how long to wait for SSH before giving up (0 = forever)")
 
 	return cmd
 }

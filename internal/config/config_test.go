@@ -429,3 +429,29 @@ func TestValidate_HostnameInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestParseForward(t *testing.T) {
+	h, g, err := ParseForward("25900:5900")
+	if err != nil || h != 25900 || g != 5900 {
+		t.Fatalf("ParseForward = %d,%d,%v", h, g, err)
+	}
+	for _, bad := range []string{"", "5900", "0:5900", "25900:70000", "a:b"} {
+		if _, _, err := ParseForward(bad); err == nil {
+			t.Errorf("ParseForward(%q) must fail", bad)
+		}
+	}
+}
+
+func TestValidate_PortsForward(t *testing.T) {
+	cfg, err := Parse([]byte("from: windows/11-pro-arm64\nports:\n  forward: [\"25900:5900\"]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid forward rejected: %v", err)
+	}
+	cfg, _ = Parse([]byte("from: windows/11-pro-arm64\nports:\n  forward: [\"nope\"]\n"))
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("malformed forward must fail validation")
+	}
+}

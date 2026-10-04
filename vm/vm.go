@@ -90,6 +90,12 @@ type VMInstallConfig struct {
 
 // VMRunConfig is the backend-agnostic configuration for booting an already-
 // installed disk (continue/finalize mode).
+// PortForward is one host→guest TCP forward on the user-mode network.
+type PortForward struct {
+	Host  uint16
+	Guest uint16
+}
+
 type VMRunConfig struct {
 	DiskPath   string
 	DiskFormat DiskFormat
@@ -106,6 +112,9 @@ type VMRunConfig struct {
 	OpenSSHHostPort uint16
 	RDPPort         uint16
 	SSHHost         string
+	// Forwards are extra host→guest TCP forwards beyond the SSH, OpenSSH
+	// and RDP ones above (e.g. a VNC server running inside the guest).
+	Forwards []PortForward
 
 	SharedDir string
 	Accel     string

@@ -321,6 +321,12 @@ func applySSHForward(spec Spec, argv []string) []string {
 			if spec.OpenSSHHostPort != 0 {
 				argv[i+1] = argv[i+1] + fmt.Sprintf(",hostfwd=tcp:%s:%d-:22", host, spec.OpenSSHHostPort)
 			}
+			for _, f := range spec.Forwards {
+				if f.Host == 0 || f.Guest == 0 {
+					continue
+				}
+				argv[i+1] = argv[i+1] + fmt.Sprintf(",hostfwd=tcp:%s:%d-:%d", host, f.Host, f.Guest)
+			}
 			break
 		}
 	}
@@ -392,7 +398,7 @@ func baseCommand(spec Spec) []string {
 		"-device", "virtio-net-pci,netdev=net0")
 
 	argv = append(argv, "-display", spec.DisplayType)
-	argv = append(argv, "-device", "ramfb")
+	argv = append(argv, "-device", "virtio-gpu-pci,max_outputs=1,edid=on")
 
 	argv = append(argv,
 		"-device", fmt.Sprintf("qemu-xhci,id=%s,p2=8", USBBusID),
@@ -405,8 +411,9 @@ func baseCommand(spec Spec) []string {
 
 	if spec.GuestStructuredLogPath != "" {
 		argv = append(argv,
+			"-device", "virtio-serial-pci,id=virtio-serial0",
 			"-chardev", "file,id=gueststruct,path="+spec.GuestStructuredLogPath+",append=on",
-			"-device", "pci-serial,chardev=gueststruct")
+			"-device", "virtserialport,bus=virtio-serial0.0,chardev=gueststruct,name=winkit.structured.0")
 	}
 
 	argv = append(argv,

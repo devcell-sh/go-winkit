@@ -127,6 +127,7 @@ func (b *Backend) StartRun(ctx context.Context, cfg vm.VMRunConfig) (vm.VM, erro
 		SSHGuestPort:    cfg.SSHGuestPort,
 		OpenSSHHostPort: cfg.OpenSSHHostPort,
 		RDPPort:         cfg.RDPPort,
+		Forwards:        cfg.Forwards,
 		SSHHost:         cfg.SSHHost,
 		Accel:           cfg.Accel,
 		SMBIOSSerial:    cfg.SMBIOSSerial,

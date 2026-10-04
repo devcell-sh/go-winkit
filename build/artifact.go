@@ -24,6 +24,10 @@ type Artifact struct {
 	Kind          string `json:"kind"`
 	BootVolume    string `json:"boot_volume"`
 	DataDisk      string `json:"data_disk"`
+	// Forwards are extra host:guest TCP forwards the image expects at
+	// start time (winkit.yaml ports.forward), e.g. a VNC server inside
+	// the guest. `winkit start` merges them with its own flags.
+	Forwards []string `json:"forwards,omitempty"`
 }
 
 // ArtifactManifestPath returns the sidecar manifest path for image.

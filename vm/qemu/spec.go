@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/devcell-sh/go-winkit/vm"
 )
 
 // Spec holds the QEMU VM configuration for a WinPE boot.
@@ -53,9 +55,11 @@ type Spec struct {
 	// Windows OpenSSH the image ships on :22, separately from the gosshd
 	// provisioning channel on SSHGuestPort.
 	OpenSSHHostPort uint16
-	SSHHost         string
-	LogVolumePath   string
-	DiskCacheMode   string
+	// Forwards are extra host→guest TCP forwards appended to the netdev.
+	Forwards      []vm.PortForward
+	SSHHost       string
+	LogVolumePath string
+	DiskCacheMode string
 	// SMBIOSSerial, when non-empty, passes -smbios type=1,serial=<value>
 	// to QEMU. The guest reads it via WMI (Win32_BIOS.SerialNumber) and
 	// can use it as a dynamic hostname source.

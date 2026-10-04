@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devcell-sh/go-winkit/build"
+	"github.com/devcell-sh/go-winkit/build/buildopts"
 	"github.com/devcell-sh/go-winkit/unattend"
 	"github.com/devcell-sh/go-winkit/vm"
 	"github.com/devcell-sh/go-winkit/vm/qemu"
@@ -46,6 +47,9 @@ type StartOpts struct {
 	Foreground bool
 	// VNCPort selects the host VNC port (default 5900). VNC is always enabled.
 	VNCPort uint16
+	// Forwards are extra host→guest TCP forwards (winkit.yaml ports.forward,
+	// `winkit start --forward host:guest`).
+	Forwards []vm.PortForward
 	// Logger receives host-side events; nil logs to run.jsonl in the
 	// VM's output directory.
 	Logger *slog.Logger
@@ -168,6 +172,31 @@ func Start(ctx context.Context, opts StartOpts) (vm.VM, error) {
 		diskPath = artifact.DataDisk
 		bootVolume = artifact.BootVolume
 	}
+	// Forwards the image declared at build time (artifact manifest) come
+	// first; caller-supplied ones add to them. Duplicates collapse.
+	forwards := opts.Forwards
+	if artifact != nil && len(artifact.Forwards) > 0 {
+		seen := map[vm.PortForward]bool{}
+		var merged []vm.PortForward
+		add := func(f vm.PortForward) {
+			if !seen[f] {
+				seen[f] = true
+				merged = append(merged, f)
+			}
+		}
+		for _, spec := range artifact.Forwards {
+			h, g, err := buildopts.ParseForward(spec)
+			if err != nil {
+				return nil, fmt.Errorf("artifact manifest forward: %w", err)
+			}
+			add(vm.PortForward{Host: h, Guest: g})
+		}
+		for _, f := range opts.Forwards {
+			add(f)
+		}
+		forwards = merged
+	}
+
 	runCfg := vm.VMRunConfig{
 		DiskPath:        diskPath,
 		OutputDir:       outDir,
@@ -179,6 +208,7 @@ func Start(ctx context.Context, opts StartOpts) (vm.VM, error) {
 		SSHGuestPort:    2222,
 		OpenSSHHostPort: sshPort + 100,
 		RDPPort:         rdpPort,
+		Forwards:        forwards,
 		SMBIOSSerial:    hostname,
 	}
 	displayType := "none"
@@ -219,6 +249,9 @@ func Start(ctx context.Context, opts StartOpts) (vm.VM, error) {
 		VNCPort:   vncPort,
 		Accel:     accel,
 		OutputDir: outDir,
+	}
+	for _, f := range forwards {
+		st.Forwards = append(st.Forwards, fmt.Sprintf("%d:%d", f.Host, f.Guest))
 	}
 	if err := vmstate.Save(stateDir, st); err != nil {
 		machine.Stop()

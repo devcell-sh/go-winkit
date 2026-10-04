@@ -49,3 +49,24 @@ func TestLoadArtifactMissingIsSingleDisk(t *testing.T) {
 		t.Fatalf("LoadArtifact = %+v, %v; want nil, nil", artifact, err)
 	}
 }
+
+func TestArtifactRoundTripKeepsForwards(t *testing.T) {
+	dir := t.TempDir()
+	boot := filepath.Join(dir, "winkit-core.qcow2")
+	data := filepath.Join(dir, "winkit-core-data.qcow2")
+	for _, p := range []string{boot, data} {
+		if err := os.WriteFile(p, []byte("media"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteArtifact(boot, Artifact{Kind: ArtifactKindPEWSL1, BootVolume: boot, DataDisk: data, Forwards: []string{"25900:5900"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadArtifact(boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Forwards) != 1 || got.Forwards[0] != "25900:5900" {
+		t.Fatalf("Forwards = %v, want [25900:5900]", got.Forwards)
+	}
+}

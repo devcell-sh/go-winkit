@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"github.com/devcell-sh/go-winkit/vm"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,17 @@ func TestApplySSHForward_GuestPortAndOpenSSH(t *testing.T) {
 			if !strings.Contains(nd, want) {
 				t.Errorf("netdev %q missing %q", nd, want)
 			}
+		}
+	})
+
+	t.Run("extra forwards are appended", func(t *testing.T) {
+		spec := Spec{SSHPort: 20022, Forwards: []vm.PortForward{{Host: 25900, Guest: 5900}, {Host: 0, Guest: 1}}}
+		nd := netdevArg(applySSHForward(spec, []string{"-netdev", "user,id=net0"}))
+		if !strings.Contains(nd, "hostfwd=tcp:127.0.0.1:25900-:5900") {
+			t.Errorf("netdev %q missing the extra forward", nd)
+		}
+		if strings.Contains(nd, "-:1") {
+			t.Errorf("netdev %q must skip a forward with a zero host port", nd)
 		}
 	})
 

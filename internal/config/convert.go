@@ -34,6 +34,7 @@ func (c *Config) ToBuildOpts() (*buildopts.BuildOpts, error) {
 			RDP:     uint16(c.Ports.RDP),
 			Gossh:   uint16(c.Ports.Gossh),
 			OpenSSH: uint16(c.Ports.OpenSSH),
+			Forward: append([]string(nil), c.Ports.Forward...),
 		}
 	}
 

@@ -3,6 +3,7 @@ package buildopts
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -85,6 +86,32 @@ type Ports struct {
 	RDP     uint16
 	Gossh   uint16
 	OpenSSH uint16
+	// Forward lists extra host→guest TCP forwards as "host:guest". They
+	// are recorded in the image's artifact manifest so `winkit start`
+	// applies them without needing the original winkit.yaml.
+	Forward []string
+}
+
+// ParseForward splits a "host:guest" forward spec into its two ports.
+func ParseForward(spec string) (host, guest uint16, err error) {
+	h, g, ok := strings.Cut(strings.TrimSpace(spec), ":")
+	if !ok {
+		return 0, 0, fmt.Errorf("forward %q: want host:guest", spec)
+	}
+	parse := func(name, s string) (uint16, error) {
+		n, convErr := strconv.Atoi(strings.TrimSpace(s))
+		if convErr != nil || n < 1 || n > 65535 {
+			return 0, fmt.Errorf("forward %q: %s port must be 1-65535", spec, name)
+		}
+		return uint16(n), nil
+	}
+	if host, err = parse("host", h); err != nil {
+		return 0, 0, err
+	}
+	if guest, err = parse("guest", g); err != nil {
+		return 0, 0, err
+	}
+	return host, guest, nil
 }
 
 func (p Ports) RDPOrDefault() uint16 {

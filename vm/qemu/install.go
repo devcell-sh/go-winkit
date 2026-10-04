@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/devcell-sh/go-winkit/vm"
 )
 
 // InstallConfig configures a Windows install boot via QEMU.
@@ -130,6 +132,8 @@ type RunConfig struct {
 	SSHGuestPort    uint16
 	OpenSSHHostPort uint16
 	RDPPort         uint16
+	// Forwards are extra host→guest TCP forwards (see vm.VMRunConfig).
+	Forwards []vm.PortForward
 	// SSHHost is the host address the forwards bind to. "" → 127.0.0.1
 	// (loopback only). Set 0.0.0.0 so another host (e.g. a container reaching
 	// the Mac via host.docker.internal) can connect to the forwarded ports.
@@ -205,6 +209,7 @@ func StartRun(ctx context.Context, cfg RunConfig) (*InstallVM, error) {
 		RDPPort:                cfg.RDPPort,
 		SSHHost:                cfg.SSHHost,
 		SMBIOSSerial:           cfg.SMBIOSSerial,
+		Forwards:               cfg.Forwards,
 	}
 	if cfg.Accel != "" {
 		spec.Accel = cfg.Accel

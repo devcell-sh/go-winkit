@@ -87,7 +87,7 @@ func TestBuildWimBuilderArgv_BaseCommand(t *testing.T) {
 	assert.Contains(t, joined, "-no-reboot")
 }
 
-func TestBaseCommand_WiresPCISerial(t *testing.T) {
+func TestBaseCommand_WiresVirtioSerial(t *testing.T) {
 	s := testSpec()
 	s.GuestStructuredLogPath = "/tmp/build.jsonl"
 	wbs := WimBuilderSpec{
@@ -97,17 +97,17 @@ func TestBaseCommand_WiresPCISerial(t *testing.T) {
 	argv := BuildWimBuilderArgv(wbs)
 	joined := strings.Join(argv, " ")
 
-	assert.Contains(t, joined, "pci-serial,chardev=gueststruct",
-		"pci-serial device must be wired when GuestStructuredLogPath is set")
+	assert.Contains(t, joined, "virtio-serial-pci",
+		"virtio-serial-pci bus must be wired when GuestStructuredLogPath is set")
+	assert.Contains(t, joined, "virtserialport",
+		"virtserialport device must be wired when GuestStructuredLogPath is set")
 	assert.Contains(t, joined, "path=/tmp/build.jsonl",
 		"structured chardev must point to the configured path")
-	assert.NotContains(t, joined, "virtio-serial",
-		"virtio-serial must not appear in the argv")
-	assert.NotContains(t, joined, "virtserialport",
-		"virtserialport must not appear in the argv")
+	assert.NotContains(t, joined, "pci-serial",
+		"pci-serial must not appear in the argv (no serial.sys on ARM64)")
 }
 
-func TestBaseCommand_NoPCISerialWithoutPath(t *testing.T) {
+func TestBaseCommand_NoVirtioSerialWithoutPath(t *testing.T) {
 	s := testSpec()
 	wbs := WimBuilderSpec{
 		Spec:     s,
@@ -116,8 +116,8 @@ func TestBaseCommand_NoPCISerialWithoutPath(t *testing.T) {
 	argv := BuildWimBuilderArgv(wbs)
 	joined := strings.Join(argv, " ")
 
-	assert.NotContains(t, joined, "pci-serial",
-		"pci-serial must NOT be wired when GuestStructuredLogPath is empty")
+	assert.NotContains(t, joined, "virtio-serial",
+		"virtio-serial must NOT be wired when GuestStructuredLogPath is empty")
 }
 
 func TestAppendNVMeDisk_Nonboot(t *testing.T) {
