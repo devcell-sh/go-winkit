@@ -78,6 +78,33 @@ func FetchContentShellFiles(cacheDir string, logf func(string, ...any)) (map[str
 	return extractChromiumZip(dest, "content-shell/", ContentShellVolDir, false, logf)
 }
 
+// MergeContentShellDeps copies locale paks and SwiftShader Vulkan files from
+// the Chrome file map into the content-shell file map. Content-shell's zip
+// doesn't ship these, but they're required for rendering in WinPE.
+func MergeContentShellDeps(chromiumFiles, contentShellFiles map[string][]byte) int {
+	merged := 0
+	for volPath, data := range chromiumFiles {
+		var dstPath string
+		switch {
+		case strings.HasPrefix(volPath, "/"+ChromiumVolDir+"/locales/"):
+			dstPath = "/" + ContentShellVolDir + "/locales/" + strings.TrimPrefix(volPath, "/"+ChromiumVolDir+"/locales/")
+		case strings.HasSuffix(volPath, "/vk_swiftshader.dll"):
+			dstPath = "/" + ContentShellVolDir + "/vk_swiftshader.dll"
+		case strings.HasSuffix(volPath, "/vk_swiftshader_icd.json"):
+			dstPath = "/" + ContentShellVolDir + "/vk_swiftshader_icd.json"
+		case strings.HasSuffix(volPath, "/vulkan-1.dll"):
+			dstPath = "/" + ContentShellVolDir + "/vulkan-1.dll"
+		default:
+			continue
+		}
+		if _, exists := contentShellFiles[dstPath]; !exists {
+			contentShellFiles[dstPath] = data
+			merged++
+		}
+	}
+	return merged
+}
+
 func extractChromiumZip(zipPath, prefix, volDir string, skipTests bool, logf func(string, ...any)) (map[string][]byte, error) {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {

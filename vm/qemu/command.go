@@ -398,6 +398,7 @@ func baseCommand(spec Spec) []string {
 		"-device", "virtio-net-pci,netdev=net0")
 
 	argv = append(argv, "-display", spec.DisplayType)
+	argv = append(argv, "-device", "ramfb")
 	argv = append(argv, "-device", "virtio-gpu-pci,max_outputs=1,edid=on")
 
 	argv = append(argv,

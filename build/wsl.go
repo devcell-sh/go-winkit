@@ -85,10 +85,11 @@ func wslAnswerConfig(pwshFiles map[string][]byte, opensshName string, opensshDat
 	cfg.OpenSSHPayload = opensshName
 	cfg.OpenSSHPayloadData = opensshData
 	cfg.OpenSSHPayloadSize = len(opensshData)
-	// netkvm (network) is installed by pnputil in the specialize pass,
-	// sourced from the virtio CD attached during install. Serial communication
-	// uses PCI COM2 (inbox serial.sys), so vioserial is no longer needed.
-	cfg.VirtIODrivers = unattend.NetKVMDriverPaths()
+	// netkvm (network) and vioserial are installed by pnputil in the
+	// specialize pass, sourced from the virtio CD attached during install.
+	// vioserial is required for guest-to-host structured logging over the
+	// virtio-serial port (winkit.structured.0).
+	cfg.VirtIODrivers = append(unattend.NetKVMDriverPaths(), unattend.VioserialDriverPaths()...)
 	// WSL1 needs the Microsoft-Windows-Subsystem-Linux optional feature; the
 	// specialize→OOBE reboot completes it before the bootstrap imports
 	// distro.wsl. Without it wsl --import --version 1 exits -1 (run

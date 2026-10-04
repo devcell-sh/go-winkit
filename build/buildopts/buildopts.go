@@ -136,15 +136,15 @@ func (p Ports) OpenSSHOrDefault() uint16 {
 }
 
 type BuildOpts struct {
-	From     string
-	PE       bool
-	WSL      *WSLConfig
-	Features []string
-	Hooks    []Hook
-	Ports    Ports
-	// Hostname is the guest computer name (doubles as the NetBIOS name);
-	// empty uses the unattend default.
-	Hostname string
+	From             string
+	PE               bool
+	DWM              bool
+	WSL              *WSLConfig
+	Features         []string
+	Hooks            []Hook
+	Ports            Ports
+	Hostname         string
+	BootstrapOnBuild bool
 }
 
 func (o *BuildOpts) Validate() error {

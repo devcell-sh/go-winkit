@@ -165,10 +165,16 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 		if cfg.StartupCommand != "" {
 			wsl1Bootstrap = `X:\winkit\winkit-service.exe`
 		}
+		var desktopShell string
+		var desktopShellArgs []string
+		if implorerData != nil {
+			desktopShell = `X:\winkit\` + ImplorerVolumeName
+			desktopShellArgs = []string{"--renderer=contentshell"}
+		}
 		payload[InitManifestName] = GenerateInitManifest(
 			infs, cfg.GosshdAddr,
 			WSL1PEUserName, wsl1PEUserPassword,
-			wsl1Bootstrap,
+			wsl1Bootstrap, desktopShell, desktopShellArgs,
 		)
 		payload["winpeshl.ini"] = []byte("[LaunchApps]\r\n" +
 			`X:\winkit\` + ServiceVolumeName + " init --config X:\\winkit\\" + InitManifestName + "\r\n")
@@ -275,17 +281,19 @@ func generateGosshdShellCmd(driverINFs []string, peAgent bool, gosshdAddr, start
 
 // initManifest mirrors the initConfig struct in cmd/winkit-service.
 type initManifest struct {
-	Drivers        []string `json:"drivers"`
-	Gosshd         string   `json:"gosshd"`
-	GosshdAddr     string   `json:"gosshdAddr,omitempty"`
-	User           string   `json:"user"`
-	Password       string   `json:"password"`
-	LogSerial      string   `json:"logSerial,omitempty"`
-	LogFile        string   `json:"logFile,omitempty"`
-	WSL1Bootstrap  string   `json:"wsl1Bootstrap,omitempty"`
-	WSL1CatalogDir string   `json:"wsl1CatalogDir,omitempty"`
-	WSL1Services   []string `json:"wsl1Services,omitempty"`
-	WSL1S6         []string `json:"wsl1S6,omitempty"`
+	Drivers          []string `json:"drivers"`
+	Gosshd           string   `json:"gosshd"`
+	GosshdAddr       string   `json:"gosshdAddr,omitempty"`
+	User             string   `json:"user"`
+	Password         string   `json:"password"`
+	LogSerial        string   `json:"logSerial,omitempty"`
+	LogFile          string   `json:"logFile,omitempty"`
+	DesktopShell     string   `json:"desktopShell,omitempty"`
+	DesktopShellArgs []string `json:"desktopShellArgs,omitempty"`
+	WSL1Bootstrap    string   `json:"wsl1Bootstrap,omitempty"`
+	WSL1CatalogDir   string   `json:"wsl1CatalogDir,omitempty"`
+	WSL1Services     []string `json:"wsl1Services,omitempty"`
+	WSL1S6           []string `json:"wsl1S6,omitempty"`
 }
 
 // wsl1KernelServices are the kernel drivers that must be running before
@@ -294,16 +302,18 @@ type initManifest struct {
 var wsl1KernelServices = []string{"bfs", "bindflt", "afunix", "wcifs", "P9Rdr"}
 
 // GenerateInitManifest produces the init.json that winkit-service init reads.
-func GenerateInitManifest(driverINFs []string, gosshdAddr, user, password, wsl1Bootstrap string) []byte {
+func GenerateInitManifest(driverINFs []string, gosshdAddr, user, password, wsl1Bootstrap, desktopShell string, desktopShellArgs []string) []byte {
 	sort.Strings(driverINFs)
 	m := initManifest{
-		Drivers:       driverINFs,
-		Gosshd:        `X:\winkit\` + GosshdVolumeName,
-		GosshdAddr:    gosshdAddr,
-		User:          user,
-		Password:      password,
-		LogSerial:     GuestSerialPort,
-		WSL1Bootstrap: wsl1Bootstrap,
+		Drivers:          driverINFs,
+		Gosshd:           `X:\winkit\` + GosshdVolumeName,
+		GosshdAddr:       gosshdAddr,
+		User:             user,
+		Password:         password,
+		LogSerial:        GuestSerialPort,
+		DesktopShell:     desktopShell,
+		DesktopShellArgs: desktopShellArgs,
+		WSL1Bootstrap:    wsl1Bootstrap,
 	}
 	if wsl1Bootstrap != "" {
 		m.WSL1CatalogDir = `X:\Windows\winkit\WSL1Catalogs`

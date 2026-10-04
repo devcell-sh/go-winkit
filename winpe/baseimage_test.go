@@ -30,7 +30,7 @@ func TestGenerateGosshdShellCmdKeepsLegacySignature(t *testing.T) {
 
 func TestGenerateInitManifest(t *testing.T) {
 	drivers := []string{`X:\winkit\drivers\netkvm.inf`, `X:\winkit\drivers\vioscsi.inf`}
-	data := GenerateInitManifest(drivers, ":2222", "winkit", "Winkit1234", `X:\winkit\winkit-service.exe`)
+	data := GenerateInitManifest(drivers, ":2222", "winkit", "Winkit1234", `X:\winkit\winkit-service.exe`, `X:\winkit\implorer.exe`, []string{"--renderer=contentshell"})
 
 	var m map[string]interface{}
 	if err := json.Unmarshal(data, &m); err != nil {
@@ -70,7 +70,7 @@ func TestGenerateInitManifest(t *testing.T) {
 }
 
 func TestGenerateInitManifest_NoWSL1(t *testing.T) {
-	data := GenerateInitManifest(nil, "", "winkit", "pass", "")
+	data := GenerateInitManifest(nil, "", "winkit", "pass", "", "", nil)
 	var m map[string]interface{}
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("invalid JSON: %v", err)

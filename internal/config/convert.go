@@ -14,11 +14,17 @@ var phaseMap = map[string]buildopts.HookPhase{
 }
 
 func (c *Config) ToBuildOpts() (*buildopts.BuildOpts, error) {
+	dwm := c.PE
+	if c.DWM != nil {
+		dwm = *c.DWM
+	}
 	opts := &buildopts.BuildOpts{
-		From:     c.From,
-		PE:       c.PE,
-		Features: c.Features,
-		Hostname: c.Hostname,
+		From:             c.From,
+		PE:               c.PE,
+		DWM:              dwm,
+		Features:         c.Features,
+		Hostname:         c.Hostname,
+		BootstrapOnBuild: c.BootstrapOnBuild,
 	}
 
 	if c.WSL != nil {

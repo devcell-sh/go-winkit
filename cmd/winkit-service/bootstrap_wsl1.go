@@ -173,7 +173,41 @@ func runBootstrapWSL1Steps(out io.Writer, cfg wsl1BootstrapConfig) error {
 		return fmt.Errorf("WSL1 probe completed without its success marker")
 	}
 
+	// Flush the user's registry hive to disk so the Lxss distro
+	// registration survives QEMU shutdown.
+	bootstrapLog(out, "wsl1-hive-flush", "flushing user registry hive to disk")
+	if err := flushUserHive(out, cfg.UserName); err != nil {
+		bootstrapLog(out, "wsl1-hive-flush-warn", fmt.Sprintf("hive flush failed (non-fatal): %v", err))
+	} else {
+		bootstrapLog(out, "wsl1-hive-flush-ok", "user registry hive flushed")
+	}
+
+	bootstrapOK := filepath.Join(fmt.Sprintf("%c:\\winkit", cfg.DriveLetter), "bootstrap.ok")
+	os.MkdirAll(filepath.Dir(bootstrapOK), 0o755)
+	if err := writeAndSync(bootstrapOK, []byte(wsl1BootstrapOKMarker)); err != nil {
+		return fmt.Errorf("writing bootstrap marker: %w", err)
+	}
+	bootstrapLog(out, "wsl1-bootstrap-marker", fmt.Sprintf("persistent bootstrap marker written to %s", bootstrapOK))
+
 	return nil
+}
+
+// writeAndSync writes data to a file and calls Sync (FlushFileBuffers on
+// Windows) to ensure the write reaches the physical disk before QEMU shutdown.
+func writeAndSync(path string, data []byte) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func joinArgs(args []string) string {

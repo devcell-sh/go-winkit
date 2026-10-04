@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -245,6 +246,30 @@ func lookupSID(account string) (*windows.SID, error) {
 	return sid, nil
 }
 
+// flushUserHive forces the user's loaded registry hive to be written to
+// its backing NTUSER.DAT file. This is critical before QEMU shutdown so
+// the Lxss distro registration persists across boots.
+func flushUserHive(out io.Writer, userName string) error {
+	sid, err := lookupSID(userName)
+	if err != nil {
+		return err
+	}
+	k, err := registry.OpenKey(registry.USERS, sid.String(), registry.QUERY_VALUE)
+	if err != nil {
+		return fmt.Errorf("opening user hive root: %w", err)
+	}
+	defer k.Close()
+
+	advapi32 := windows.NewLazySystemDLL("advapi32.dll")
+	regFlushKey := advapi32.NewProc("RegFlushKey")
+	r, _, callErr := regFlushKey.Call(uintptr(k))
+	if r != 0 {
+		return fmt.Errorf("RegFlushKey: %v", callErr)
+	}
+	bootstrapLog(out, "wsl1-hive-flush", fmt.Sprintf("flushed HKU\\%s", sid.String()))
+	return nil
+}
+
 // isHiveLoaded checks if a user registry hive is already mounted.
 func isHiveLoaded(sidStr string) bool {
 	k, err := registry.OpenKey(registry.USERS, sidStr, registry.QUERY_VALUE)
@@ -400,6 +425,89 @@ func importAndProbeDistro(out io.Writer, cfg wsl1BootstrapConfig) error {
 
 	os.WriteFile(filepath.Join(work, "probe.ok"), []byte(wsl1ProbeOKMarker), 0o644)
 	bootstrapLog(out, "wsl1-probe-ok", wsl1ProbeOKMarker)
+	return nil
+}
+
+// activateWSL1 sets up the volatile state that doesn't survive reboot but is
+// required for WSL to work: kernel drivers, WSL registry entries, WSLService,
+// and the user's registry hive (which contains the Lxss distro registration).
+func activateWSL1(out io.Writer, cfg wsl1BootstrapConfig) error {
+	// Kernel services needed for WSL1.
+	for _, svc := range []string{"bfs", "bindflt", "afunix", "wcifs", "P9Rdr"} {
+		bootstrapLog(out, "activate-svc", fmt.Sprintf("ensuring service %s", svc))
+		if err := ensureService(svc, 30*time.Second); err != nil {
+			bootstrapLog(out, "activate-svc-warn", fmt.Sprintf("ensure-service %s skipped: %v", svc, err))
+		}
+	}
+
+	// Point the WSL service registry entries at the persistent runtime
+	// on E:\. The files were copied during bootstrap; here we only fix
+	// the in-memory registry which is rebuilt from the ramdisk each boot.
+	bootstrapLog(out, "activate-wsl-registry", "patching WSL service registry for persistent runtime")
+	if err := patchWSLServiceRegistry(cfg.WSLDest); err != nil {
+		return fmt.Errorf("patching WSL service registry: %w", err)
+	}
+
+	bootstrapLog(out, "activate-wslservice", "starting WSLService")
+	if err := ensureService("WSLService", 30*time.Second); err != nil {
+		return fmt.Errorf("ensuring WSLService: %w", err)
+	}
+
+	// Load the user's registry hive so WSL can find the Lxss distro
+	// registration written during bootstrap.
+	bootstrapLog(out, "activate-profile", "loading user registry hive")
+	sid, err := lookupSID(cfg.UserName)
+	if err != nil {
+		return fmt.Errorf("looking up SID for %s: %w", cfg.UserName, err)
+	}
+	userHiveKey := sid.String()
+	if !isHiveLoaded(userHiveKey) {
+		profilePath := filepath.Join(cfg.ProfileRoot, cfg.UserName)
+		ntuser := filepath.Join(profilePath, "NTUSER.DAT")
+		if err := runChecked(out, "reg.exe", "load", `HKU\`+userHiveKey, ntuser); err != nil {
+			return fmt.Errorf("loading user hive: %w", err)
+		}
+		bootstrapLog(out, "activate-profile-ok", fmt.Sprintf("user hive loaded from %s", ntuser))
+	} else {
+		bootstrapLog(out, "activate-profile-ok", "user hive already loaded")
+	}
+
+	return nil
+}
+
+// patchWSLServiceRegistry writes the WSL service registry entries without
+// copying files (they're already on E:\ from the bootstrap).
+func patchWSLServiceRegistry(wslDest string) error {
+	type regEntry struct {
+		key, valueName, data string
+		expand               bool
+	}
+	entries := []regEntry{
+		{`SYSTEM\CurrentControlSet\Services\WSLService`, "ImagePath",
+			fmt.Sprintf(`"%s\wslservice.exe"`, wslDest), true},
+		{`SOFTWARE\Classes\CLSID\{4EA0C6DD-E9FF-48E7-994E-13A31D10DC60}\InProcServer32`, "",
+			fmt.Sprintf(`%s\wslserviceproxystub.dll`, wslDest), false},
+		{`SOFTWARE\Classes\CLSID\{2B9C59C3-98F1-45C8-B87B-12AE3C7927E8}\LocalServer32`, "",
+			fmt.Sprintf(`"%s\wslhost.exe"`, wslDest), false},
+		{`SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss\MSI`, "InstallLocation",
+			wslDest + `\`, false},
+	}
+	for _, e := range entries {
+		k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, e.key, registry.SET_VALUE)
+		if err != nil {
+			return fmt.Errorf("opening registry key %s: %w", e.key, err)
+		}
+		var setErr error
+		if e.expand {
+			setErr = k.SetExpandStringValue(e.valueName, e.data)
+		} else {
+			setErr = k.SetStringValue(e.valueName, e.data)
+		}
+		k.Close()
+		if setErr != nil {
+			return fmt.Errorf("writing registry %s\\%s: %w", e.key, e.valueName, setErr)
+		}
+	}
 	return nil
 }
 

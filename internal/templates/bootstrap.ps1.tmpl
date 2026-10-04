@@ -45,8 +45,8 @@ try {
 function Send-Progress([string]$msg) {
     $line = "winkit-bootstrap: $msg"
     Write-Output $line
-    # COM2 is the PCI 16550 serial port backed by build.jsonl on the host.
-    # Uses the inbox serial.sys driver, available immediately without drvload.
+    # Virtio-serial port backed by build.jsonl on the host.
+    # Requires the vioserial driver installed during specialize.
     $port = '{{.StructPort}}'
     try {
         $fs = [System.IO.File]::Open($port,

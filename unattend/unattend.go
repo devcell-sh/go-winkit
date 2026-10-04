@@ -339,12 +339,9 @@ func NetKVMDriverPaths() []VirtIODriver {
 }
 
 // VioserialDriverPaths returns the virtio-win vioserial driver for Windows
-// ARM64.
-//
-// Deprecated: serial communication now uses PCI COM2 (inbox serial.sys).
-// This function is retained only for callers that still need the vioserial
-// driver for non-serial purposes. Staged in specialize so PnP installs
-// it on the OOBE boot.
+// ARM64. Required for guest-to-host structured logging over the
+// virtio-serial port (winkit.structured.0). Staged in specialize so PnP
+// installs it on the OOBE boot.
 func VioserialDriverPaths() []VirtIODriver {
 	return []VirtIODriver{{
 		INFRelPath:  `vioserial\w11\ARM64\vioser.inf`,

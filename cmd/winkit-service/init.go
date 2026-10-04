@@ -30,6 +30,11 @@ type initConfig struct {
 	// succeeds and respawns it if it exits, so it is supervised the same
 	// way gosshd is: no SCM service, no service logon right.
 	WSL1S6 []string `json:"wsl1S6,omitempty"`
+	// DesktopShell, when set, is the path to the desktop shell binary
+	// (implorer.exe). Launched as the admin user after DWM and WinSta0
+	// are ready. Not set by default: populate init.json to enable.
+	DesktopShell     string   `json:"desktopShell,omitempty"`
+	DesktopShellArgs []string `json:"desktopShellArgs,omitempty"`
 }
 
 func parseInitConfig(data []byte) (*initConfig, error) {
@@ -46,30 +51,12 @@ func parseInitConfig(data []byte) (*initConfig, error) {
 	return &cfg, nil
 }
 
-// runInit is the PID-1 supervisor for WinPE. It reads the init manifest,
-// initializes the PE environment (wpeinit, drivers, firewall), creates
-// the admin user, and spawns all children under that user's context.
-// It stays foreground so WinPE doesn't reboot.
-func runInit(configPath string) error {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("reading init config: %w", err)
-	}
-	cfg, err := parseInitConfig(data)
-	if err != nil {
-		return err
-	}
-
-	out := initOutput(cfg)
-
-	initLog(out, "init-start", "winkit-service init starting")
-
-	// Ensure X:\winkit and X:\winkit\pwsh are on PATH so children
-	// (gosshd shell sessions, bootstrap scripts) can find pwsh.exe
-	// and winkit-service.exe without full paths.
+// initPEEnvironment runs the PE environment setup shared by both init
+// and bootstrap: wpeinit, driver loading, serial port, DWM, EventLog,
+// firewall, and user creation with WinSta0 access.
+func initPEEnvironment(out io.Writer, cfg *initConfig) error {
 	initSetPath()
 
-	// Phase 1: WinPE initialization (SYSTEM context).
 	initLog(out, "init-wpeinit", "running wpeinit")
 	if err := runCmd(out, "wpeinit"); err != nil {
 		initLog(out, "init-wpeinit-error", fmt.Sprintf("wpeinit failed: %v (continuing)", err))
@@ -82,9 +69,6 @@ func runInit(configPath string) error {
 		}
 	}
 
-	// drvload loads the vioserial driver, which creates the
-	// virtio-serial port device. Retry opening the serial port now
-	// that the driver is running and the device is enumerated.
 	if cfg.LogSerial != "" {
 		if mw, ok := out.(*multiWriter); ok {
 			if f := openSerialPort(cfg.LogSerial); f != nil {
@@ -96,9 +80,6 @@ func runInit(configPath string) error {
 		}
 	}
 
-	// Phase 1b: start the DWM compositor. The DWM binaries and registry
-	// entries are transplanted from install.wim at build time. DWM must
-	// start as SYSTEM before any user-context GUI processes launch.
 	if _, err := os.Stat(`X:\windows\system32\dwm.exe`); err == nil {
 		initLog(out, "init-dwm", "starting Desktop Window Manager")
 		if err := startDWM(out); err != nil {
@@ -108,7 +89,6 @@ func runInit(configPath string) error {
 		}
 	}
 
-	// Start EventLog so structured logging from pe-agent works.
 	pwsh := findPwsh()
 	if pwsh != "" {
 		if err := runCmd(out, pwsh, "-NoProfile", "-Command",
@@ -122,7 +102,6 @@ func runInit(configPath string) error {
 		initLog(out, "init-firewall-error", fmt.Sprintf("DisableFirewall failed: %v (continuing)", err))
 	}
 
-	// Phase 2: create the admin user.
 	initLog(out, "init-user", fmt.Sprintf("creating user %s", cfg.User))
 	if err := ensureLocalUser(cfg.User, cfg.Password); err != nil {
 		return fmt.Errorf("ensure-user %s: %w", cfg.User, err)
@@ -131,56 +110,107 @@ func runInit(configPath string) error {
 		return fmt.Errorf("add-to-administrators %s: %w", cfg.User, err)
 	}
 	initLog(out, "init-user-ok", fmt.Sprintf("user %s ready", cfg.User))
-	// Everything spawned below runs as cfg.User on this (SYSTEM) desktop.
-	// Without an ACE for that account on WinSta0 and the Default desktop,
-	// GUI processes create windows but can never paint them.
+
 	if err := grantWindowStationAccess(cfg.User); err != nil {
 		initLog(out, "init-winsta-error", fmt.Sprintf("granting %s access to WinSta0: %v (GUI apps will not paint)", cfg.User, err))
 	} else {
 		initLog(out, "init-winsta-ok", fmt.Sprintf("%s granted access to WinSta0 and the Default desktop", cfg.User))
 	}
 
-	// Phase 3: start pe-agent (structured logging) under user context.
+	return nil
+}
+
+// runInit is the PID-1 activate supervisor for WinPE. It reads the init
+// manifest, runs the PE environment setup, spawns services, and if the
+// bootstrap phase hasn't run yet, runs it now. Stays foreground so WinPE
+// doesn't reboot.
+func runInit(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("reading init config: %w", err)
+	}
+	cfg, err := parseInitConfig(data)
+	if err != nil {
+		return err
+	}
+
+	out := initOutput(cfg)
+
+	initLog(out, "activate-start", "winkit-service activate starting")
+
+	if err := initPEEnvironment(out, cfg); err != nil {
+		return err
+	}
+
+	// Activate: start desktop shell (if configured) under user context.
+	if cfg.DesktopShell != "" {
+		initLog(out, "activate-desktop-shell", fmt.Sprintf("starting desktop shell %s", cfg.DesktopShell))
+		if err := spawnAsUser(cfg.User, cfg.Password, cfg.DesktopShell, cfg.DesktopShellArgs); err != nil {
+			initLog(out, "activate-desktop-shell-error", fmt.Sprintf("desktop shell failed to start: %v (continuing)", err))
+		} else {
+			initLog(out, "activate-desktop-shell-ok", "desktop shell started")
+		}
+	}
+
+	// Activate: start pe-agent (structured logging) under user context.
 	self, _ := os.Executable()
 	peAgentArgs := []string{"run", "--name", "pe-agent"}
 	if cfg.LogSerial != "" {
 		peAgentArgs = append(peAgentArgs, "--log-serial", cfg.LogSerial)
 	}
-	initLog(out, "init-pe-agent", "starting pe-agent")
+	initLog(out, "activate-pe-agent", "starting pe-agent")
 	if err := spawnAsUser(cfg.User, cfg.Password, self, peAgentArgs); err != nil {
-		initLog(out, "init-pe-agent-error", fmt.Sprintf("pe-agent failed to start: %v (continuing)", err))
+		initLog(out, "activate-pe-agent-error", fmt.Sprintf("pe-agent failed to start: %v (continuing)", err))
 	}
 
-	// Phase 4: start gosshd under user context (the primary SSH server).
+	// Activate: start gosshd under user context (the primary SSH server).
 	gosshdArgs := []string{}
 	if cfg.GosshdAddr != "" {
 		gosshdArgs = append(gosshdArgs, "-addr", cfg.GosshdAddr)
 	}
-	initLog(out, "init-gosshd", fmt.Sprintf("starting gosshd as %s", cfg.User))
+	initLog(out, "activate-gosshd", fmt.Sprintf("starting gosshd as %s", cfg.User))
 	if err := spawnAsUser(cfg.User, cfg.Password, cfg.Gosshd, gosshdArgs); err != nil {
 		return fmt.Errorf("starting gosshd: %w", err)
 	}
 
-	// Phase 5: WSL1 bootstrap (if configured).
+	// Bootstrap or activate: if the persistent marker on E:\ shows a
+	// previous bootstrap completed, run the lightweight activate path
+	// (mount volume, load drivers, load user hive). Otherwise run the
+	// full bootstrap.
 	if cfg.WSL1Bootstrap != "" {
-		initLog(out, "init-wsl1", "starting WSL1 bootstrap (native Go)")
 		bsCfg := defaultWSL1BootstrapConfig(filepath.Dir(cfg.WSL1Bootstrap))
 		bsCfg.UserName = cfg.User
 		bsCfg.Password = cfg.Password
 		if cfg.WSL1CatalogDir != "" {
 			bsCfg.CatalogDir = cfg.WSL1CatalogDir
 		}
-		if err := runBootstrapWSL1(out, bsCfg); err != nil {
-			initLog(out, "init-wsl1-error", fmt.Sprintf("WSL1 bootstrap failed: %v", err))
-		} else {
-			initLog(out, "init-wsl1-ok", "WSL1 bootstrap complete")
-			if len(cfg.WSL1S6) > 0 {
-				go superviseWSL1S6(out, cfg)
+
+		if err := ensureWritableVolume(out, bsCfg); err != nil {
+			initLog(out, "activate-volume-error", fmt.Sprintf("writable volume: %v", err))
+		}
+
+		bootstrapMarker := fmt.Sprintf("%c:\\winkit\\bootstrap.ok", bsCfg.DriveLetter)
+		if _, err := os.Stat(bootstrapMarker); err == nil {
+			initLog(out, "activate-wsl1", "bootstrap already complete, running activate path")
+			if err := activateWSL1(out, bsCfg); err != nil {
+				initLog(out, "activate-wsl1-error", fmt.Sprintf("WSL1 activate failed: %v", err))
+			} else {
+				initLog(out, "activate-wsl1-ok", "WSL1 activate complete")
 			}
+		} else {
+			initLog(out, "bootstrap-wsl1", "starting WSL1 bootstrap (native Go)")
+			if err := runBootstrapWSL1(out, bsCfg); err != nil {
+				initLog(out, "bootstrap-wsl1-error", fmt.Sprintf("WSL1 bootstrap failed: %v", err))
+			} else {
+				initLog(out, "bootstrap-wsl1-ok", "WSL1 bootstrap complete")
+			}
+		}
+		if len(cfg.WSL1S6) > 0 {
+			go superviseWSL1S6(out, cfg)
 		}
 	}
 
-	initLog(out, "init-ready", "all children started, supervising")
+	initLog(out, "activate-ready", "all children started, supervising")
 
 	// Stay alive: WinPE reboots when winpeshl's process exits.
 	for {

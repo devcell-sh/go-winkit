@@ -57,9 +57,9 @@ type InstallConfig struct {
 	// RDPPort forwards host:RDPPort → guest:3389 for Remote Desktop. Zero
 	// disables it.
 	RDPPort uint16
-	// StructuredLogPath, when set, backs the COM2 pci-serial port with a
-	// build.jsonl file (the guest streams structured events there using
-	// the inbox serial.sys driver).
+	// StructuredLogPath, when set, backs the virtio-serial port with a
+	// build.jsonl file (the guest streams structured events there via
+	// the vioserial driver).
 	StructuredLogPath string
 	// Secure boots the VM on the EL3/secure-world machine (secure=on, GICv3/ITS,
 	// neoverse-n1, -kernel firmware). Required for the Hyper-V hypervisor to
@@ -148,7 +148,7 @@ type RunConfig struct {
 	// Detach runs QEMU in its own process group so it survives the parent's
 	// exit. The caller must track the PID and stop it via QMP or signals.
 	Detach bool
-	// StructuredLogPath, when set, backs the COM2 pci-serial port with a
+	// StructuredLogPath, when set, backs the virtio-serial port with a
 	// host-side file so gosshd guest events are captured.
 	StructuredLogPath string
 }

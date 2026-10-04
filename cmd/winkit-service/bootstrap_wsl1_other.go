@@ -45,3 +45,11 @@ func exportDNSServers(_ io.Writer, _ byte) error {
 func importAndProbeDistro(_ io.Writer, _ wsl1BootstrapConfig) error {
 	return fmt.Errorf("WSL distro import is only supported on Windows")
 }
+
+func activateWSL1(_ io.Writer, _ wsl1BootstrapConfig) error {
+	return fmt.Errorf("WSL1 activate is only supported on Windows")
+}
+
+func flushUserHive(_ io.Writer, _ string) error {
+	return fmt.Errorf("registry hive flush is only supported on Windows")
+}

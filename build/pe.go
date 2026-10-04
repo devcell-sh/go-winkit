@@ -2,10 +2,15 @@ package build
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
+	"github.com/devcell-sh/go-winkit/vm"
 	"github.com/devcell-sh/go-winkit/vm/qemu"
 	"github.com/devcell-sh/go-winkit/winpe"
 	"github.com/devcell-sh/go-winkit/wsl"
@@ -55,11 +60,15 @@ func PE(ctx context.Context, c Config) error {
 		return err
 	}
 
+	dwmEnabled := c.Opts != nil && c.Opts.DWM
+
 	var implorerExe string
-	if implorerPath := filepath.Join(c.WorkDir, "implorer.exe"); true {
-		if err := winpe.CrossCompileImplorer(implorerPath, arch); err == nil {
-			implorerExe = implorerPath
-			logger.Info("implorer desktop shell available", "target", "windows/"+arch)
+	if dwmEnabled {
+		if implorerPath := filepath.Join(c.WorkDir, "implorer.exe"); true {
+			if err := winpe.CrossCompileImplorer(implorerPath, arch); err == nil {
+				implorerExe = implorerPath
+				logger.Info("implorer desktop shell available", "target", "windows/"+arch)
+			}
 		}
 	}
 
@@ -70,27 +79,31 @@ func PE(ctx context.Context, c Config) error {
 		return err
 	}
 
+	logf := func(f string, a ...any) { logger.Info(fmt.Sprintf(f, a...)) }
+
 	var webView2Files map[string][]byte
-	if implorerExe != "" {
-		wv2, err := winpe.FetchWebView2Files(c.CacheDir, func(f string, a ...any) {
-			logger.Info(fmt.Sprintf(f, a...))
-		})
+	var chromiumFiles map[string][]byte
+	var contentShellFiles map[string][]byte
+	if dwmEnabled {
+		wv2, err := winpe.FetchWebView2Files(c.CacheDir, logf)
 		if err != nil {
 			return fmt.Errorf("fetching WebView2 runtime: %w", err)
 		}
 		webView2Files = wv2
-	}
 
-	logf := func(f string, a ...any) { logger.Info(fmt.Sprintf(f, a...)) }
+		chromiumFiles, err = winpe.FetchChromiumFiles(c.CacheDir, logf)
+		if err != nil {
+			return fmt.Errorf("fetching Chromium: %w", err)
+		}
 
-	chromiumFiles, err := winpe.FetchChromiumFiles(c.CacheDir, logf)
-	if err != nil {
-		return fmt.Errorf("fetching Chromium: %w", err)
-	}
+		contentShellFiles, err = winpe.FetchContentShellFiles(c.CacheDir, logf)
+		if err != nil {
+			return fmt.Errorf("fetching content-shell: %w", err)
+		}
 
-	contentShellFiles, err := winpe.FetchContentShellFiles(c.CacheDir, logf)
-	if err != nil {
-		return fmt.Errorf("fetching content-shell: %w", err)
+		if n := winpe.MergeContentShellDeps(chromiumFiles, contentShellFiles); n > 0 {
+			logger.Debug("merged Chrome deps into content-shell", "files", n)
+		}
 	}
 
 	logger.Info("building PE boot volume")
@@ -155,12 +168,14 @@ func PE(ctx context.Context, c Config) error {
 	}
 	logger.Debug("transferred WSL1 components", "files", len(transferred))
 
-	logger.Info("transferring DWM compositor into boot.wim")
-	dwmTransferred, err := winpe.TransferDWMFiles(installWimPath, bootWimPath)
-	if err != nil {
-		return fmt.Errorf("transferring DWM components: %w", err)
+	if dwmEnabled {
+		logger.Info("transferring DWM compositor into boot.wim")
+		dwmTransferred, err := winpe.TransferDWMFiles(installWimPath, bootWimPath)
+		if err != nil {
+			return fmt.Errorf("transferring DWM components: %w", err)
+		}
+		logger.Debug("transferred DWM components", "files", len(dwmTransferred))
 	}
-	logger.Debug("transferred DWM components", "files", len(dwmTransferred))
 
 	wslDir, err := winpe.FetchWSL1Engine(ctx, c.CacheDir, c.NoCache, func(f string, a ...any) {
 		logger.Info(fmt.Sprintf(f, a...))
@@ -177,9 +192,11 @@ func PE(ctx context.Context, c Config) error {
 		return fmt.Errorf("patching WSL1 boot.wim: %w", err)
 	}
 
-	logger.Info("patching boot.wim with DWM service registry")
-	if err := winpe.PatchWIM(bootWimPath, winpe.DWMServicePatchSet()); err != nil {
-		return fmt.Errorf("patching DWM boot.wim: %w", err)
+	if dwmEnabled {
+		logger.Info("patching boot.wim with DWM service registry")
+		if err := winpe.PatchWIM(bootWimPath, winpe.DWMServicePatchSet()); err != nil {
+			return fmt.Errorf("patching DWM boot.wim: %w", err)
+		}
 	}
 	// TODO: re-enable hostname patch after isolating crash.
 	// logger.Info("setting PE hostname", "hostname", hostname)
@@ -244,6 +261,16 @@ func PE(ctx context.Context, c Config) error {
 			return err
 		}
 	}
+	// Bootstrap phase: boot the PE image and run WSL1 bootstrap inside
+	// the guest. The host monitors the structured log for completion.
+	if c.Opts != nil && c.Opts.BootstrapOnBuild {
+		logger.Info("bootstrap: booting PE to run WSL1 bootstrap")
+		if err := BootstrapPE(ctx, c, c.Dest, dataDisk); err != nil {
+			return fmt.Errorf("bootstrap phase: %w", err)
+		}
+		logger.Info("bootstrap: complete")
+	}
+
 	artifact := Artifact{
 		Kind:       ArtifactKindPEWSL1,
 		BootVolume: c.Dest,
@@ -253,4 +280,149 @@ func PE(ctx context.Context, c Config) error {
 		artifact.Forwards = append(artifact.Forwards, c.Opts.Ports.Forward...)
 	}
 	return WriteArtifact(c.Dest, artifact)
+}
+
+// BootstrapPE boots the PE image during the build, waits for the WSL1
+// bootstrap to complete (monitoring the structured log for the terminal
+// event), then shuts down QEMU. This moves the heavy provisioning work
+// out of `winkit start` into the build.
+func BootstrapPE(ctx context.Context, c Config, bootVolume, dataDisk string) error {
+	logger := c.logger()
+	bootstrapDir := filepath.Join(c.WorkDir, "bootstrap")
+	os.MkdirAll(bootstrapDir, 0o755)
+
+	guestJSONL := filepath.Join(bootstrapDir, "guest.jsonl")
+
+	fwPath := qemu.FirmwarePath()
+	if fwPath == "" {
+		return fmt.Errorf("no UEFI firmware found")
+	}
+	varsPath := filepath.Join(bootstrapDir, "vars.fd")
+	if err := qemu.PrepareVarsFile(fwPath, varsPath); err != nil {
+		return fmt.Errorf("preparing bootstrap vars: %w", err)
+	}
+
+	accel := c.Accel
+	if accel == "" {
+		accel = qemu.DefaultAccel()
+	}
+
+	runCfg := vm.VMRunConfig{
+		DiskPath:     dataDisk,
+		OutputDir:    bootstrapDir,
+		VMName:       "winkit-bootstrap",
+		CPUs:         4,
+		MemoryGB:     4,
+		Accel:        accel,
+		SSHPort:      20022,
+		SSHGuestPort: 2222,
+		BackendExtra: &qemu.RunOptions{
+			BootVolume:        bootVolume,
+			VarsPath:          varsPath,
+			Secure:            false,
+			DisplayType:       "none",
+			StructuredLogPath: guestJSONL,
+		},
+	}
+
+	backend := &qemu.Backend{}
+	machine, err := backend.StartRun(ctx, runCfg)
+	if err != nil {
+		return fmt.Errorf("starting bootstrap VM: %w", err)
+	}
+	defer machine.Stop()
+
+	stopTail := make(chan struct{})
+	go tailStream(filepath.Join(machine.OutputDir(), "serial.log"), "serial", logger, stopTail)
+	go tailStream(filepath.Join(machine.OutputDir(), "qemu.log"), "qemu", logger, stopTail)
+	go tailStream(guestJSONL, "bootstrap", logger, stopTail)
+	qmpSock := qemu.QMPSocketFromVM(machine)
+
+	logger.Info("bootstrap: waiting for WSL1 bootstrap to complete", "guest_log", guestJSONL)
+	err = waitForBootstrapEvent(ctx, guestJSONL, machine.Done(), 30*time.Minute)
+
+	if err == nil {
+		logger.Info("bootstrap: event received, waiting for guest filesystem flush")
+		time.Sleep(10 * time.Second)
+	}
+
+	close(stopTail)
+
+	if qmpSock != "" {
+		_ = qemu.QMPQuit(qmpSock)
+		time.Sleep(3 * time.Second)
+	}
+
+	return err
+}
+
+// waitForBootstrapEvent monitors the guest structured log file for the
+// terminal bootstrap event. Returns nil on success.
+func waitForBootstrapEvent(ctx context.Context, logPath string, vmDone <-chan struct{}, timeout time.Duration) error {
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	var offset int64
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("bootstrap timed out after %v", timeout)
+		case <-vmDone:
+			if ev, ok := scanForEvent(logPath, &offset); ok {
+				return ev
+			}
+			return fmt.Errorf("VM exited before bootstrap completed")
+		case <-ticker.C:
+			if ev, ok := scanForEvent(logPath, &offset); ok {
+				return ev
+			}
+		}
+	}
+}
+
+func scanForEvent(logPath string, offset *int64) (error, bool) {
+	f, err := os.Open(logPath)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	if _, err := f.Seek(*offset, 0); err != nil {
+		return nil, false
+	}
+
+	buf, err := io.ReadAll(f)
+	if err != nil || len(buf) == 0 {
+		return nil, false
+	}
+	*offset += int64(len(buf))
+
+	for _, line := range strings.Split(string(buf), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev struct {
+			Event string `json:"event"`
+			Msg   string `json:"msg"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		switch ev.Event {
+		case "wsl1-bootstrap-ok", "bootstrap-wsl1-ok":
+			return nil, true
+		case "wsl1-bootstrap-failed", "bootstrap-wsl1-error":
+			return fmt.Errorf("bootstrap failed: %s", ev.Msg), true
+		}
+		if strings.Contains(ev.Msg, "WSL1_BOOTSTRAP_OK") {
+			return nil, true
+		}
+		if strings.Contains(ev.Msg, "WSL1_BOOTSTRAP_FAILED") {
+			return fmt.Errorf("bootstrap failed: %s", ev.Msg), true
+		}
+	}
+	return nil, false
 }
