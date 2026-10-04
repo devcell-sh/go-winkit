@@ -47,13 +47,3 @@ func detachPEAgent() {
 	fmt.Fprintf(os.Stderr, "detach: pe-agent started (pid %d)\n", pi.ProcessId)
 }
 
-func joinArgs(args []string) string {
-	var s string
-	for i, a := range args {
-		if i > 0 {
-			s += " "
-		}
-		s += a
-	}
-	return s
-}

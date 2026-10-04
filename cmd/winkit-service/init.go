@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -24,6 +25,11 @@ type initConfig struct {
 	WSL1Bootstrap  string   `json:"wsl1Bootstrap,omitempty"`
 	WSL1CatalogDir string   `json:"wsl1CatalogDir,omitempty"`
 	WSL1Services   []string `json:"wsl1Services,omitempty"`
+	// WSL1S6 is the wsl.exe command line that runs s6-svscan inside the
+	// distro. init spawns it under the winkit user once the bootstrap
+	// succeeds and respawns it if it exits, so it is supervised the same
+	// way gosshd is: no SCM service, no service logon right.
+	WSL1S6 []string `json:"wsl1S6,omitempty"`
 }
 
 func parseInitConfig(data []byte) (*initConfig, error) {
@@ -76,6 +82,32 @@ func runInit(configPath string) error {
 		}
 	}
 
+	// drvload loads the vioserial driver, which creates the
+	// virtio-serial port device. Retry opening the serial port now
+	// that the driver is running and the device is enumerated.
+	if cfg.LogSerial != "" {
+		if mw, ok := out.(*multiWriter); ok {
+			if f := openSerialPort(cfg.LogSerial); f != nil {
+				mw.mu.Lock()
+				mw.sinks = append(mw.sinks, f)
+				mw.mu.Unlock()
+				initLog(out, "init-serial", fmt.Sprintf("serial port %s now available", cfg.LogSerial))
+			}
+		}
+	}
+
+	// Phase 1b: start the DWM compositor. The DWM binaries and registry
+	// entries are transplanted from install.wim at build time. DWM must
+	// start as SYSTEM before any user-context GUI processes launch.
+	if _, err := os.Stat(`X:\windows\system32\dwm.exe`); err == nil {
+		initLog(out, "init-dwm", "starting Desktop Window Manager")
+		if err := startDWM(out); err != nil {
+			initLog(out, "init-dwm-error", fmt.Sprintf("DWM failed: %v (GUI compositing unavailable)", err))
+		} else {
+			initLog(out, "init-dwm-ok", "DWM compositor running")
+		}
+	}
+
 	// Start EventLog so structured logging from pe-agent works.
 	pwsh := findPwsh()
 	if pwsh != "" {
@@ -99,6 +131,14 @@ func runInit(configPath string) error {
 		return fmt.Errorf("add-to-administrators %s: %w", cfg.User, err)
 	}
 	initLog(out, "init-user-ok", fmt.Sprintf("user %s ready", cfg.User))
+	// Everything spawned below runs as cfg.User on this (SYSTEM) desktop.
+	// Without an ACE for that account on WinSta0 and the Default desktop,
+	// GUI processes create windows but can never paint them.
+	if err := grantWindowStationAccess(cfg.User); err != nil {
+		initLog(out, "init-winsta-error", fmt.Sprintf("granting %s access to WinSta0: %v (GUI apps will not paint)", cfg.User, err))
+	} else {
+		initLog(out, "init-winsta-ok", fmt.Sprintf("%s granted access to WinSta0 and the Default desktop", cfg.User))
+	}
 
 	// Phase 3: start pe-agent (structured logging) under user context.
 	self, _ := os.Executable()
@@ -123,40 +163,19 @@ func runInit(configPath string) error {
 
 	// Phase 5: WSL1 bootstrap (if configured).
 	if cfg.WSL1Bootstrap != "" {
-		// Register WSL1 catalogs and start kernel drivers under SYSTEM
-		// context: the catalog API and SCM require privileges the winkit
-		// user doesn't have, even as a member of Administrators.
+		initLog(out, "init-wsl1", "starting WSL1 bootstrap (native Go)")
+		bsCfg := defaultWSL1BootstrapConfig(filepath.Dir(cfg.WSL1Bootstrap))
+		bsCfg.UserName = cfg.User
+		bsCfg.Password = cfg.Password
 		if cfg.WSL1CatalogDir != "" {
-			initLog(out, "init-wsl1-catalogs", "registering WSL1 catalogs (SYSTEM)")
-			count, catErr := addCatalogs(cfg.WSL1CatalogDir)
-			if catErr != nil {
-				initLog(out, "init-wsl1-catalogs-error", fmt.Sprintf("add-catalogs: %v", catErr))
-			} else {
-				initLog(out, "init-wsl1-catalogs-ok", fmt.Sprintf("registered %d catalogs", count))
-			}
+			bsCfg.CatalogDir = cfg.WSL1CatalogDir
 		}
-		for _, svc := range cfg.WSL1Services {
-			initLog(out, "init-wsl1-svc", fmt.Sprintf("ensuring service %s", svc))
-			if err := ensureService(svc, 30*time.Second); err != nil {
-				initLog(out, "init-wsl1-svc-error", fmt.Sprintf("ensure-service %s: %v", svc, err))
-			}
-		}
-
-		initLog(out, "init-wsl1", "starting WSL1 bootstrap (SYSTEM)")
-		bpwsh := findPwsh()
-		if bpwsh == "" {
-			initLog(out, "init-wsl1-error", "pwsh not found, skipping WSL1 bootstrap")
+		if err := runBootstrapWSL1(out, bsCfg); err != nil {
+			initLog(out, "init-wsl1-error", fmt.Sprintf("WSL1 bootstrap failed: %v", err))
 		} else {
-			// The bootstrap runs as SYSTEM: diskpart, wpeutil, HKLM
-			// registry writes, and SCM service starts all need
-			// privileges the winkit user may lack. WSL-specific
-			// operations (import, probe) use run-user internally to
-			// execute under the winkit user's context.
-			bootstrapArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", cfg.WSL1Bootstrap}
-			if err := runCmd(out, bpwsh, bootstrapArgs...); err != nil {
-				initLog(out, "init-wsl1-error", fmt.Sprintf("WSL1 bootstrap failed: %v", err))
-			} else {
-				initLog(out, "init-wsl1-ok", "WSL1 bootstrap complete")
+			initLog(out, "init-wsl1-ok", "WSL1 bootstrap complete")
+			if len(cfg.WSL1S6) > 0 {
+				go superviseWSL1S6(out, cfg)
 			}
 		}
 	}
@@ -166,6 +185,32 @@ func runInit(configPath string) error {
 	// Stay alive: WinPE reboots when winpeshl's process exits.
 	for {
 		time.Sleep(30 * time.Second)
+	}
+}
+
+// superviseWSL1S6 keeps s6-svscan running inside the WSL1 distro. The
+// command is wrapped in `winkit-service run` so every line the services
+// print reaches the serial port as a JSON event tagged winkit-s6, exactly
+// as it would under the SCM, but the process runs as the winkit user via
+// CreateProcessAsUser like gosshd does. wsl.exe must run as that user:
+// the distro is registered in the user's Lxss hive.
+func superviseWSL1S6(out io.Writer, cfg *initConfig) {
+	self, _ := os.Executable()
+	args := []string{"run", "--name", "winkit-s6"}
+	if cfg.LogSerial != "" {
+		args = append(args, "--log-serial", cfg.LogSerial)
+	}
+	args = append(args, "--log-file", `E:\winkit\winkit-s6.log`, "--")
+	args = append(args, cfg.WSL1S6...)
+	for attempt := 1; ; attempt++ {
+		initLog(out, "init-s6-start", fmt.Sprintf("starting s6 in WSL1 as %s (attempt %d)", cfg.User, attempt))
+		err := spawnAsUserAndWait(cfg.User, cfg.Password, self, args)
+		if err != nil {
+			initLog(out, "init-s6-exit", fmt.Sprintf("s6 wrapper exited: %v", err))
+		} else {
+			initLog(out, "init-s6-exit", "s6 wrapper exited")
+		}
+		time.Sleep(5 * time.Second)
 	}
 }
 

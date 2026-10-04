@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,8 @@ var validVerbs = map[string]bool{
 	"find-catalog":   true,
 	"ensure-service": true,
 	"ensure-user":    true,
+	"recv":            true,
+	"bootstrap-wsl1": true,
 }
 
 type options struct {
@@ -56,7 +59,9 @@ type options struct {
 	detach     bool
 	configPath string
 	catalogDir string
-	filePath   string
+	filePath    string
+	toPath      string
+	runtimeRoot string
 }
 
 func parseArgs(args []string) (verb, name string, cmd []string, err error) {
@@ -70,11 +75,11 @@ func parseArgs(args []string) (verb, name string, cmd []string, err error) {
 func parseOptions(args []string) (options, error) {
 	var opts options
 	if len(args) == 0 {
-		return opts, fmt.Errorf("usage: winkit-service <install|uninstall|start|stop|status|run> --name <name> [options] [-- cmd ...] | winkit-service run-user --user <user> --password <password> [--current-dir <path>] -- cmd ... | winkit-service add-catalogs --dir <catalog-directory> | winkit-service find-catalog --file <signed-file> | winkit-service ensure-service --name <service> | winkit-service ensure-user --user <user> --password <password>")
+		return opts, fmt.Errorf("usage: winkit-service <install|uninstall|start|stop|status|run> --name <name> [options] [-- cmd ...] | winkit-service run-user --user <user> --password <password> [--current-dir <path>] -- cmd ... | winkit-service add-catalogs --dir <catalog-directory> | winkit-service find-catalog --file <signed-file> | winkit-service ensure-service --name <service> | winkit-service ensure-user --user <user> --password <password> | winkit-service recv --to <path>")
 	}
 	opts.verb = args[0]
 	if !validVerbs[opts.verb] {
-		return opts, fmt.Errorf("unknown verb %q; expected install|uninstall|start|stop|status|run|run-user|add-catalogs|find-catalog|ensure-service|ensure-user", opts.verb)
+		return opts, fmt.Errorf("unknown verb %q; expected install|uninstall|start|stop|status|run|run-user|add-catalogs|find-catalog|ensure-service|ensure-user|recv", opts.verb)
 	}
 	args = args[1:]
 
@@ -129,6 +134,16 @@ func parseOptions(args []string) (options, error) {
 				opts.filePath = args[i+1]
 				i++
 			}
+		case "--to":
+			if i+1 < len(args) {
+				opts.toPath = args[i+1]
+				i++
+			}
+		case "--runtime-root":
+			if i+1 < len(args) {
+				opts.runtimeRoot = args[i+1]
+				i++
+			}
 		case "--":
 			opts.cmd = args[i+1:]
 			i = len(args)
@@ -144,6 +159,15 @@ func parseOptions(args []string) (options, error) {
 		if opts.filePath == "" {
 			return opts, fmt.Errorf("find-catalog requires --file")
 		}
+		return opts, nil
+	}
+	if opts.verb == "recv" {
+		if opts.toPath == "" {
+			return opts, fmt.Errorf("recv requires --to")
+		}
+		return opts, nil
+	}
+	if opts.verb == "bootstrap-wsl1" {
 		return opts, nil
 	}
 	if opts.verb == "init" {
@@ -300,6 +324,24 @@ func buildOutput(opts options, svcLogger service.Logger) (io.Writer, []io.Closer
 	return mw, closers
 }
 
+// initBootstrapOutput builds the output writer for bootstrap-wsl1.
+// It mirrors initOutput but works from CLI flags instead of initConfig.
+func initBootstrapOutput(opts options) io.Writer {
+	mw := &multiWriter{}
+	mw.sinks = append(mw.sinks, os.Stderr)
+	if opts.logFile != "" {
+		if f, err := os.OpenFile(opts.logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+			mw.sinks = append(mw.sinks, f)
+		}
+	}
+	if opts.logSerial != "" {
+		if f := openSerialPort(opts.logSerial); f != nil {
+			mw.sinks = append(mw.sinks, f)
+		}
+	}
+	return mw
+}
+
 func main() {
 	opts, err := parseOptions(os.Args[1:])
 	if err != nil {
@@ -342,6 +384,35 @@ func main() {
 			}
 		}
 		fmt.Printf("user %s exists\n", opts.user)
+		return
+	}
+	if opts.verb == "recv" {
+		n, recvErr := receiveFile(os.Stdin, opts.toPath)
+		if recvErr != nil {
+			fmt.Fprintf(os.Stderr, "recv: %v\n", recvErr)
+			os.Exit(1)
+		}
+		fmt.Printf("received %d bytes into %s\n", n, opts.toPath)
+		return
+	}
+	if opts.verb == "bootstrap-wsl1" {
+		runtimeRoot := opts.runtimeRoot
+		if runtimeRoot == "" {
+			self, _ := os.Executable()
+			runtimeRoot = filepath.Dir(self)
+		}
+		cfg := defaultWSL1BootstrapConfig(runtimeRoot)
+		if opts.user != "" {
+			cfg.UserName = opts.user
+		}
+		if opts.password != "" {
+			cfg.Password = opts.password
+		}
+		out := initBootstrapOutput(opts)
+		if bErr := runBootstrapWSL1(out, cfg); bErr != nil {
+			fmt.Fprintf(os.Stderr, "bootstrap-wsl1: %v\n", bErr)
+			os.Exit(1)
+		}
 		return
 	}
 	if opts.verb == "find-catalog" {
@@ -403,6 +474,14 @@ func main() {
 
 	switch opts.verb {
 	case "install":
+		// A service account needs SeServiceLogonRight or `start` fails
+		// with 1069; grant it before registering (see lsa_windows.go).
+		if opts.user != "" {
+			if grantErr := grantServiceLogonRight(opts.user); grantErr != nil {
+				fmt.Fprintf(os.Stderr, "install: granting SeServiceLogonRight to %s: %v\n", opts.user, grantErr)
+				os.Exit(1)
+			}
+		}
 		err = service.Control(svc, "install")
 	case "uninstall":
 		err = service.Control(svc, "uninstall")
