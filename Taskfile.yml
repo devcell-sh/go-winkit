@@ -1,5 +1,10 @@
 version: "3"
 
+includes:
+  implorer:
+    taskfile: ./implorer/Taskfile.yml
+    dir: ./implorer
+
 tasks:
   build:
     desc: Build winkit CLI binary → ./bin/winkit
@@ -16,11 +21,15 @@ tasks:
       TAGS: '{{.WINKIT_BUILD_TAGS | default .DEFAULT_TAGS}}'
     cmds:
       - mkdir -p bin
-      # Prebuild the gosshd guest binary and embed it (winpe/embedded), so
-      # the installed winkit can provision images from any directory —
-      # without it, build falls back to `go build`, which only works
-      # inside this source tree.
-      - CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -o ./winpe/embedded/gosshd_windows_arm64.exe ./gosshd/cmd/gosshd
+      # Prebuild the gosshd and winkit-service guest binaries and embed
+      # them (winpe/embedded), so the installed winkit can provision images
+      # from any directory: without them, build falls back to `go build`,
+      # which only works inside this source tree.
+      - for: [arm64, amd64]
+        cmd: CGO_ENABLED=0 GOOS=windows GOARCH={{.ITEM}} go build -o ./winpe/embedded/gosshd_windows_{{.ITEM}}.exe ./gosshd/cmd/gosshd
+      - for: [arm64, amd64]
+        cmd: CGO_ENABLED=0 GOOS=windows GOARCH={{.ITEM}} go build -o ./winpe/embedded/winkit-service_windows_{{.ITEM}}.exe ./cmd/winkit-service
+      - task: implorer:build
       - CGO_ENABLED={{if eq OS "darwin"}}1{{else}}0{{end}} go build {{if .TAGS}}-tags "{{.TAGS}}" {{end}}-o ./bin/winkit ./cmd/winkit/
       - '[ "$(uname -s)" != "Darwin" ] || xattr -c ./bin/winkit'
       - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - ./bin/winkit'

@@ -1,0 +1,45 @@
+version: "3"
+
+vars:
+  EMBEDDED_DIR: "{{.TASKFILE_DIR}}/../winpe/embedded"
+
+tasks:
+  deps:
+    desc: Install frontend dependencies
+    dir: "{{.TASKFILE_DIR}}/frontend"
+    sources:
+      - package.json
+    generates:
+      - node_modules/.package-lock.json
+    cmds:
+      - npm install
+
+  frontend:
+    desc: Build the Svelte frontend
+    dir: "{{.TASKFILE_DIR}}/frontend"
+    deps: [deps]
+    sources:
+      - src/**/*
+      - "*.html"
+      - vite.config.ts
+      - package.json
+    generates:
+      - dist/**/*
+    cmds:
+      - npx vite build
+
+  build:
+    desc: Cross-compile implorer for Windows ARM64/AMD64 → winpe/embedded/
+    deps: [frontend]
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
+      - mkdir -p {{.EMBEDDED_DIR}}
+      - for: [arm64, amd64]
+        cmd: GOWORK=off CGO_ENABLED=0 GOOS=windows GOARCH={{.ITEM}} go build -o {{.EMBEDDED_DIR}}/implorer_windows_{{.ITEM}}.exe .
+
+  dev:
+    desc: Run implorer in dev mode (host OS, not cross-compiled)
+    deps: [frontend]
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
+      - GOWORK=off go run .

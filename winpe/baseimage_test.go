@@ -13,8 +13,8 @@ func TestGenerateGosshdShellCmdLaunchesStartupBeforeForegroundSSH(t *testing.T) 
 	if startup < 0 || server < 0 || startup >= server {
 		t.Fatalf("startup must run before gosshd:\n%s", out)
 	}
-	if !strings.Contains(out, `pwsh.exe -NoLogo -NoProfile -NonInteractive`) {
-		t.Fatalf("WSL1 startup must immediately delegate to PowerShell:\n%s", out)
+	if !strings.Contains(out, `winkit-service.exe bootstrap-wsl1`) {
+		t.Fatalf("WSL1 startup must invoke the native Go bootstrap:\n%s", out)
 	}
 }
 
@@ -30,7 +30,7 @@ func TestGenerateGosshdShellCmdKeepsLegacySignature(t *testing.T) {
 
 func TestGenerateInitManifest(t *testing.T) {
 	drivers := []string{`X:\winkit\drivers\netkvm.inf`, `X:\winkit\drivers\vioscsi.inf`}
-	data := GenerateInitManifest(drivers, ":2222", "winkit", "Winkit1234", `X:\winkit\bootstrap-wsl1.ps1`)
+	data := GenerateInitManifest(drivers, ":2222", "winkit", "Winkit1234", `X:\winkit\winkit-service.exe`)
 
 	var m map[string]interface{}
 	if err := json.Unmarshal(data, &m); err != nil {
@@ -45,7 +45,7 @@ func TestGenerateInitManifest(t *testing.T) {
 	if m["user"] != "winkit" {
 		t.Fatalf("user = %v", m["user"])
 	}
-	if m["wsl1Bootstrap"] != `X:\winkit\bootstrap-wsl1.ps1` {
+	if m["wsl1Bootstrap"] != `X:\winkit\winkit-service.exe` {
 		t.Fatalf("wsl1Bootstrap = %v", m["wsl1Bootstrap"])
 	}
 	ds := m["drivers"].([]interface{})
@@ -55,6 +55,10 @@ func TestGenerateInitManifest(t *testing.T) {
 	// Sorted: netkvm before vioscsi
 	if ds[0] != `X:\winkit\drivers\netkvm.inf` {
 		t.Fatalf("drivers[0] = %v (expected sorted)", ds[0])
+	}
+	s6 := m["wsl1S6"].([]interface{})
+	if len(s6) != 7 || s6[0] != `E:\Program Files\WSL\wsl.exe` || s6[6] != "/bin/s6-init" {
+		t.Fatalf("wsl1S6 = %v", s6)
 	}
 	if m["wsl1CatalogDir"] != `X:\Windows\winkit\WSL1Catalogs` {
 		t.Fatalf("wsl1CatalogDir = %v", m["wsl1CatalogDir"])

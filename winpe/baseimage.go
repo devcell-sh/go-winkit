@@ -37,6 +37,10 @@ type BaseImageConfig struct {
 	// (CrossCompileService). When set, the pe-agent mode is started
 	// detached before gosshd so Panther logs stream to build.jsonl.
 	ServiceExe string
+	// ImplorerExe is a cross-compiled implorer desktop shell binary
+	// (CrossCompileImplorer). When set, it is injected into the PE volume
+	// so winkit-service can launch it after boot.
+	ImplorerExe string
 	// GosshdAddr overrides the listen address gosshd binds to inside the
 	// guest (e.g. ":2222"). Empty means the gosshd default (":22").
 	GosshdAddr string
@@ -44,6 +48,16 @@ type BaseImageConfig struct {
 	// When set, they are injected into boot.wim so pwsh.exe is available at
 	// X:\winkit\pwsh\pwsh.exe inside WinPE.
 	PwshFiles map[string][]byte
+	// WebView2Files are the extracted WebView2 fixed-version runtime files
+	// (from FetchWebView2Files). When set, they are injected into boot.wim
+	// so implorer can find the runtime at X:\winkit\webview2\ inside WinPE.
+	WebView2Files map[string][]byte
+	// ChromiumFiles are the extracted Chromium ARM64 browser files
+	// (from FetchChromiumFiles). Injected at X:\winkit\chrome\ in WinPE.
+	ChromiumFiles map[string][]byte
+	// ContentShellFiles are the extracted content-shell ARM64 files
+	// (from FetchContentShellFiles). Injected at X:\winkit\content-shell\.
+	ContentShellFiles map[string][]byte
 	// WorkDir holds the stage and inject trees; a temp dir when empty.
 	WorkDir string
 	// StartupCommand, when non-empty, is launched after WinPE/network/driver
@@ -83,6 +97,8 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 	for _, load := range []func(string) (map[string][]byte, error){
 		LoadWinPEStorageDrivers,
 		LoadWinPENetKVMDrivers,
+		LoadWinPEVioserialDrivers,
+		LoadWinPEViogpudoDrivers,
 	} {
 		m, err := load(cfg.VirtIOISO)
 		if err != nil {
@@ -128,14 +144,26 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 		}
 	}
 
+	var implorerData []byte
+	if cfg.ImplorerExe != "" {
+		var ierr error
+		implorerData, ierr = os.ReadFile(cfg.ImplorerExe)
+		if ierr != nil {
+			return nil, fmt.Errorf("reading implorer payload: %w", ierr)
+		}
+	}
+
 	payload := map[string][]byte{
 		GosshdVolumeName: gosshd,
+	}
+	if implorerData != nil {
+		payload[ImplorerVolumeName] = implorerData
 	}
 	if serviceData != nil {
 		payload[ServiceVolumeName] = serviceData
 		wsl1Bootstrap := ""
 		if cfg.StartupCommand != "" {
-			wsl1Bootstrap = `X:\winkit\bootstrap-wsl1.ps1`
+			wsl1Bootstrap = `X:\winkit\winkit-service.exe`
 		}
 		payload[InitManifestName] = GenerateInitManifest(
 			infs, cfg.GosshdAddr,
@@ -161,6 +189,36 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 		}
 		if err := os.WriteFile(hostPath, data, 0o644); err != nil {
 			return nil, fmt.Errorf("writing pwsh %s: %w", volPath, err)
+		}
+	}
+
+	for volPath, data := range cfg.WebView2Files {
+		hostPath := filepath.Join(injectDir, filepath.FromSlash(strings.TrimPrefix(volPath, "/")))
+		if err := os.MkdirAll(filepath.Dir(hostPath), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(hostPath, data, 0o644); err != nil {
+			return nil, fmt.Errorf("writing webview2 %s: %w", volPath, err)
+		}
+	}
+
+	for volPath, data := range cfg.ChromiumFiles {
+		hostPath := filepath.Join(injectDir, filepath.FromSlash(strings.TrimPrefix(volPath, "/")))
+		if err := os.MkdirAll(filepath.Dir(hostPath), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(hostPath, data, 0o644); err != nil {
+			return nil, fmt.Errorf("writing chromium %s: %w", volPath, err)
+		}
+	}
+
+	for volPath, data := range cfg.ContentShellFiles {
+		hostPath := filepath.Join(injectDir, filepath.FromSlash(strings.TrimPrefix(volPath, "/")))
+		if err := os.MkdirAll(filepath.Dir(hostPath), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(hostPath, data, 0o644); err != nil {
+			return nil, fmt.Errorf("writing content-shell %s: %w", volPath, err)
 		}
 	}
 
@@ -227,6 +285,7 @@ type initManifest struct {
 	WSL1Bootstrap  string   `json:"wsl1Bootstrap,omitempty"`
 	WSL1CatalogDir string   `json:"wsl1CatalogDir,omitempty"`
 	WSL1Services   []string `json:"wsl1Services,omitempty"`
+	WSL1S6         []string `json:"wsl1S6,omitempty"`
 }
 
 // wsl1KernelServices are the kernel drivers that must be running before
@@ -249,6 +308,9 @@ func GenerateInitManifest(driverINFs []string, gosshdAddr, user, password, wsl1B
 	if wsl1Bootstrap != "" {
 		m.WSL1CatalogDir = `X:\Windows\winkit\WSL1Catalogs`
 		m.WSL1Services = wsl1KernelServices
+		// The bootstrap relocates the packaged WSL runtime to E:; init
+		// runs s6 through that wsl.exe under the winkit user.
+		m.WSL1S6 = []string{`E:\Program Files\WSL\wsl.exe`, "-d", WSL1PEDistroName, "-u", "root", "-e", "/bin/s6-init"}
 	}
 	data, _ := json.MarshalIndent(m, "", "  ")
 	return data

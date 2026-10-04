@@ -18,7 +18,12 @@ const PECapacity = 4 * 1024 * 1024 * 1024
 // PEWSL1DataDiskSizeGB is the writable NTFS disk paired with a PE+WSL1
 // boot volume. It holds the relocated runtime, 4 GB pagefile, user profile,
 // and imported distro.
-const PEWSL1DataDiskSizeGB = 8
+// PEWSL1DataDiskSizeGB sizes the writable NTFS disk paired with a PE+WSL1
+// boot volume. The qcow2 is sparse, so this is a ceiling, not an
+// allocation. The bootstrap places a 4 GB pagefile on it and `wsl --import`
+// unpacks the rootfs next to it; a Nix rootfs with a desktop closure runs
+// past the old 8 GB, which failed the import with "No space left on device".
+const PEWSL1DataDiskSizeGB = 32
 
 // PE assembles a WinPE boot volume at c.Dest: gosshd cross-compiled for
 // the guest, PowerShell 7 payload, and the boot files from the
@@ -50,6 +55,14 @@ func PE(ctx context.Context, c Config) error {
 		return err
 	}
 
+	var implorerExe string
+	if implorerPath := filepath.Join(c.WorkDir, "implorer.exe"); true {
+		if err := winpe.CrossCompileImplorer(implorerPath, arch); err == nil {
+			implorerExe = implorerPath
+			logger.Info("implorer desktop shell available", "target", "windows/"+arch)
+		}
+	}
+
 	pwshFiles, err := winpe.FetchPwshFiles(c.CacheDir, func(f string, a ...any) {
 		logger.Info(fmt.Sprintf(f, a...))
 	})
@@ -57,16 +70,43 @@ func PE(ctx context.Context, c Config) error {
 		return err
 	}
 
+	var webView2Files map[string][]byte
+	if implorerExe != "" {
+		wv2, err := winpe.FetchWebView2Files(c.CacheDir, func(f string, a ...any) {
+			logger.Info(fmt.Sprintf(f, a...))
+		})
+		if err != nil {
+			return fmt.Errorf("fetching WebView2 runtime: %w", err)
+		}
+		webView2Files = wv2
+	}
+
+	logf := func(f string, a ...any) { logger.Info(fmt.Sprintf(f, a...)) }
+
+	chromiumFiles, err := winpe.FetchChromiumFiles(c.CacheDir, logf)
+	if err != nil {
+		return fmt.Errorf("fetching Chromium: %w", err)
+	}
+
+	contentShellFiles, err := winpe.FetchContentShellFiles(c.CacheDir, logf)
+	if err != nil {
+		return fmt.Errorf("fetching content-shell: %w", err)
+	}
+
 	logger.Info("building PE boot volume")
 	logger.Debug("image sources", "windows", c.WindowsISO, "virtio", c.VirtIOISO)
 	baseCfg := winpe.BaseImageConfig{
-		WindowsISO: c.WindowsISO,
-		VirtIOISO:  c.VirtIOISO,
-		GosshdExe:  gosshdExe,
-		GosshdAddr: ":2222",
-		ServiceExe: serviceExe,
-		PwshFiles:  pwshFiles,
-		WorkDir:    c.WorkDir,
+		WindowsISO:        c.WindowsISO,
+		VirtIOISO:         c.VirtIOISO,
+		GosshdExe:         gosshdExe,
+		GosshdAddr:        ":2222",
+		ServiceExe:        serviceExe,
+		ImplorerExe:       implorerExe,
+		PwshFiles:         pwshFiles,
+		WebView2Files:     webView2Files,
+		ChromiumFiles:     chromiumFiles,
+		ContentShellFiles: contentShellFiles,
+		WorkDir:           c.WorkDir,
 	}
 	if wsl1 {
 		baseCfg.StartupCommand = winpe.WSL1PEStartupCommand
@@ -97,17 +137,30 @@ func PE(ctx context.Context, c Config) error {
 		return qemu.CreateFATQcow2(c.Dest, files, PECapacity)
 	}
 
-	logger.Info("assembling WSL1 WinPE runtime")
+	// The WSL1 runtime is assembled from three sources: the WSL1 optional
+	// component carried in install.wim, the WSL engine MSI from GitHub,
+	// and winkit's own PowerShell helpers. Each is its own step because
+	// extracting install.wim and rewriting boot.wim are the slow parts.
+	logger.Info("extracting install.wim from Windows ISO")
 	installWimPath := filepath.Join(c.WorkDir, "install.wim")
 	if err := winpe.Extract7zToFile(c.WindowsISO, "sources/install.wim", installWimPath); err != nil {
 		return fmt.Errorf("extracting install.wim for WSL1: %w", err)
 	}
 	defer os.Remove(installWimPath)
+
+	logger.Info("transferring WSL1 components into boot.wim")
 	transferred, err := winpe.TransferWSL1Files(installWimPath, bootWimPath)
 	if err != nil {
 		return fmt.Errorf("transferring WSL1 components: %w", err)
 	}
-	logger.Info("transferred WSL1 components", "files", len(transferred))
+	logger.Debug("transferred WSL1 components", "files", len(transferred))
+
+	logger.Info("transferring DWM compositor into boot.wim")
+	dwmTransferred, err := winpe.TransferDWMFiles(installWimPath, bootWimPath)
+	if err != nil {
+		return fmt.Errorf("transferring DWM components: %w", err)
+	}
+	logger.Debug("transferred DWM components", "files", len(dwmTransferred))
 
 	wslDir, err := winpe.FetchWSL1Engine(ctx, c.CacheDir, c.NoCache, func(f string, a ...any) {
 		logger.Info(fmt.Sprintf(f, a...))
@@ -115,12 +168,18 @@ func PE(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
+	logger.Info("patching boot.wim with WSL1 engine and helpers")
 	patch, err := winpe.WSL1PEPatchSet(c.WorkDir, wslDir)
 	if err != nil {
 		return err
 	}
 	if err := winpe.PatchWIM(bootWimPath, patch); err != nil {
 		return fmt.Errorf("patching WSL1 boot.wim: %w", err)
+	}
+
+	logger.Info("patching boot.wim with DWM service registry")
+	if err := winpe.PatchWIM(bootWimPath, winpe.DWMServicePatchSet()); err != nil {
+		return fmt.Errorf("patching DWM boot.wim: %w", err)
 	}
 	// TODO: re-enable hostname patch after isolating crash.
 	// logger.Info("setting PE hostname", "hostname", hostname)
@@ -140,6 +199,15 @@ func PE(ctx context.Context, c Config) error {
 	distro, err := wsl.DistroFor(image, winpe.WSL1PEUserName, winpe.WSL1PEDistroName, c.NixHome)
 	if err != nil {
 		return err
+	}
+	// Extra s6 services bake into the rootfs exactly as in the full image;
+	// the PE bootstrap starts s6-svscan through winkit-service once the
+	// distro is imported. PutService lets a user service override a
+	// built-in of the same name instead of erroring.
+	for _, svc := range c.WSLServices {
+		if err := distro.PutService(svc); err != nil {
+			return fmt.Errorf("adding s6 service %s: %w", svc.Name, err)
+		}
 	}
 	distroPath, err := distro.Materialize(ctx, c.CacheDir, c.NoCache, func(f string, a ...any) {
 		logger.Info(fmt.Sprintf(f, a...))
@@ -176,9 +244,13 @@ func PE(ctx context.Context, c Config) error {
 			return err
 		}
 	}
-	return WriteArtifact(c.Dest, Artifact{
+	artifact := Artifact{
 		Kind:       ArtifactKindPEWSL1,
 		BootVolume: c.Dest,
 		DataDisk:   dataDisk,
-	})
+	}
+	if c.Opts != nil {
+		artifact.Forwards = append(artifact.Forwards, c.Opts.Ports.Forward...)
+	}
+	return WriteArtifact(c.Dest, artifact)
 }

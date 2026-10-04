@@ -1,0 +1,1 @@
+import{a as o,c as a,f as n,m as p}from"./render-BSPOZBGe.js";var v=n('<div class="desktop svelte-11x9s5f"><div class="watermark svelte-11x9s5f"><span class="logo svelte-11x9s5f"></span> <span class="sub svelte-11x9s5f">winkit desktop shell</span></div></div>');function r(t){var s=v(),e=a(s),l=a(e);l.textContent="implorer",o(t,s)}p(r,{target:document.getElementById("app")});
