@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -113,4 +115,24 @@ func TestClient_RunStream(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, code)
 	assert.Contains(t, stdout.String(), "streamed")
+}
+
+func TestClient_RunInput_StreamsStdinToCommand(t *testing.T) {
+	// The server pipes session stdin into the command; `winkit cp` relies
+	// on that to push binary files into a guest with no sftp.
+	addr := testServerWithShell(t)
+	c, err := Dial(context.Background(), addr)
+	require.NoError(t, err)
+	defer c.Close()
+
+	dst := filepath.Join(t.TempDir(), "received.bin")
+	payload := bytes.Repeat([]byte{0, 1, 2, 0xff, '\n', '\r'}, 20000)
+
+	var out bytes.Buffer
+	code, err := c.RunInput(context.Background(), "cat > "+dst, bytes.NewReader(payload), &out, &out)
+	require.NoError(t, err, out.String())
+	assert.Equal(t, 0, code)
+	got, err := os.ReadFile(dst)
+	require.NoError(t, err)
+	assert.Equal(t, payload, got, "binary payload must arrive byte for byte")
 }

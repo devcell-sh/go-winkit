@@ -118,6 +118,31 @@ func (c *Client) RunStream(ctx context.Context, cmd string, stdout, stderr io.Wr
 	return 0, nil
 }
 
+// RunInput executes a command with stdin fed from input and output
+// streamed to the writers. The server pipes session stdin into the
+// command, so this is the transport for pushing files into a guest that
+// has no sftp. Cancelling ctx closes the session, like Run.
+func (c *Client) RunInput(ctx context.Context, cmd string, input io.Reader, stdout, stderr io.Writer) (int, error) {
+	sess, err := c.conn.NewSession()
+	if err != nil {
+		return -1, fmt.Errorf("creating session: %w", err)
+	}
+	defer sess.Close()
+
+	sess.Stdin = input
+	sess.Stdout = stdout
+	sess.Stderr = stderr
+
+	runErr := runSession(ctx, sess, cmd)
+	if runErr != nil {
+		if exitErr, ok := runErr.(*cryptossh.ExitError); ok {
+			return exitErr.ExitStatus(), nil
+		}
+		return -1, runErr
+	}
+	return 0, nil
+}
+
 // Close closes the SSH connection.
 func (c *Client) Close() error {
 	return c.conn.Close()
