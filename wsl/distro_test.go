@@ -80,11 +80,16 @@ func TestDistroForDockerRefs(t *testing.T) {
 
 func TestRefBaseName(t *testing.T) {
 	for ref, want := range map[string]string{
-		"alpine":                   "alpine",
-		"alpine:3.21":              "alpine",
-		"ubuntu:24.04":             "ubuntu",
-		"ghcr.io/org/img:tag":      "img",
-		"docker.io/library/debian": "debian",
+		"alpine":                                  "alpine",
+		"alpine:3.21":                             "alpine",
+		"ubuntu:24.04":                            "ubuntu",
+		"ghcr.io/org/img:tag":                     "img",
+		"docker.io/library/debian":                "debian",
+		"localhost:5000/alpine":                   "alpine",
+		"localhost:5000/alpine:3.21":              "alpine",
+		"alpine@sha256:0123456789abcdef":          "alpine",
+		"ubuntu:24.04@sha256:0123456789abcdef":    "ubuntu",
+		"ghcr.io/org/img@sha256:0123456789abcdef": "img",
 	} {
 		if got := refBaseName(ref); got != want {
 			t.Errorf("refBaseName(%q) = %q, want %q", ref, got, want)

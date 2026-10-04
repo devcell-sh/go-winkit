@@ -59,15 +59,17 @@ var namedVerify = map[string]struct{ cmd, contains string }{
 	"debian": {"cat /etc/os-release", "Debian"},
 }
 
-// refBaseName strips the tag and registry path from a docker ref:
-// "alpine:3.21" → "alpine", "ghcr.io/org/img:tag" → "img".
+// refBaseName strips the registry path, tag, and digest from a docker
+// ref: "alpine:3.21" → "alpine", "ghcr.io/org/img:tag" → "img",
+// "alpine@sha256:…" → "alpine". The path is cut first so a registry port
+// ("localhost:5000/img") is never mistaken for a tag; the digest is cut
+// before the tag because "@sha256:" also contains a colon.
 func refBaseName(ref string) string {
 	if i := strings.LastIndex(ref, "/"); i >= 0 {
 		ref = ref[i+1:]
 	}
-	if i := strings.Index(ref, ":"); i >= 0 {
-		ref = ref[:i]
-	}
+	ref, _, _ = strings.Cut(ref, "@")
+	ref, _, _ = strings.Cut(ref, ":")
 	return ref
 }
 
