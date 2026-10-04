@@ -108,12 +108,35 @@ try {
         -RuntimePath 'E:\Program Files\WSL' -DistroPath 'E:\wsl-winkit' -NewDistributionLxFs 0 2>&1 |
         ForEach-Object { Write-BootstrapLog ([string] $_) }
 
-    Write-BootstrapLog 'Importing and probing the Alpine WSL1 distro'
+    # WSL1 under WinPE regenerates the distro's /etc/resolv.conf without
+    # nameservers. Export the Windows DNS list to the data disk; the
+    # distro's /bin/s6-init reads it back through drvfs (/mnt/e/winkit).
+    Write-BootstrapLog 'Exporting Windows DNS servers for the distro'
+    $dnsServers = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces' |
+        ForEach-Object {
+            $p = Get-ItemProperty $_.PSPath
+            $ns = if ($p.PSObject.Properties['NameServer']) { $p.NameServer } else { $null }
+            $dhcp = if ($p.PSObject.Properties['DhcpNameServer']) { $p.DhcpNameServer } else { $null }
+            @($ns, $dhcp)
+        } |
+        Where-Object { $_ } | ForEach-Object { $_ -split '[ ,]+' } | Where-Object { $_ } | Select-Object -Unique
+    if ($dnsServers) {
+        New-Item -ItemType Directory -Force 'E:\winkit' | Out-Null
+        $lines = $dnsServers | ForEach-Object { "nameserver $_" }
+        [IO.File]::WriteAllText('E:\winkit\resolv.conf', (($lines -join "`n") + "`n"))
+        Write-BootstrapLog "DNS servers: $($dnsServers -join ', ')"
+    } else {
+        Write-BootstrapLog 'No DNS servers found on any interface; the distro will use public resolvers'
+    }
+
+    Write-BootstrapLog 'Importing and probing the WSL1 distro'
     & (Join-Path $runtimeRoot 'probe-wsl1.ps1') -UserName $userName -Password $password -ServicePath $service 2>&1 |
         ForEach-Object { Write-BootstrapLog ([string] $_) }
     if (-not (Test-Path 'E:\winkit\probe.ok')) {
         throw 'WSL1 probe completed without its success marker'
     }
+    # s6 inside the distro is started and supervised by winkit-service init
+    # (as the winkit user) once this script reports success.
 
     Set-Content $okMarker 'WSL1_BOOTSTRAP_OK' -Encoding ascii
     Write-BootstrapLog 'WSL1_BOOTSTRAP_OK'
@@ -122,4 +145,5 @@ try {
     Write-BootstrapLog $failure
     Write-BootstrapLog ($_ | Out-String)
     Set-Content $failedMarker $failure -Encoding utf8
+    exit 1
 }

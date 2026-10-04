@@ -77,15 +77,37 @@ RUN mkdir -p /usr/lib/locale \
 # and without login/interactive flags, so bash reads no startup files.
 # Docker ENV is lost on export, and WSL1 doesn't read /etc/environment.
 # The wrapper re-execs as a login+interactive shell so bash loads
-# /etc/profile and ~/.bashrc (HM-managed). ---
+# /etc/profile and ~/.bashrc (HM-managed).
+# When arguments are present (e.g. SSH sends -c "command"), forward them
+# to bash -l so remote commands execute instead of being dropped. ---
 RUN mkdir -p /usr/local/bin \
- && printf '#!/bin/sh\nexec bash -li\n' > /usr/local/bin/login-bash \
+ && printf '#!/bin/sh\nif [ $# -gt 0 ]; then\n    exec bash -l "$@"\nelse\n    exec bash -li\nfi\n' > /usr/local/bin/login-bash \
  && chmod +x /usr/local/bin/login-bash \
  && ln -sf /usr/local/bin/login-bash /bin/login-bash
 
-# --- Create user in the image (OOBE is a fallback) ---
+# --- Account database. nixos/nix ships /etc/passwd, group and shadow as
+# symlinks into a read-only store path; appending through them mutates the
+# store and later GC or store repair can revert it. Replace them with real
+# files first. glibc also needs /etc/nsswitch.conf: without it every NSS
+# lookup stats the missing file and leaves errno=ENOENT behind, which
+# s6-envuidgid (used by s6-setuidgid) reports as "unable to get
+# supplementary groups" even though the group exists. The sshd privilege
+# separation user and /var/empty are required for sshd to start. ---
+RUN for f in passwd group shadow; do \
+      cp --remove-destination "$(readlink -f /etc/$f)" /etc/$f.winkit && mv /etc/$f.winkit /etc/$f; \
+    done \
+ && chmod 644 /etc/passwd /etc/group && chmod 600 /etc/shadow \
+ && printf 'passwd: files\ngroup: files\nshadow: files\nhosts: files dns\n' > /etc/nsswitch.conf \
+ && (grep -q '^sshd:' /etc/passwd || echo 'sshd:x:74:74:sshd privsep:/var/empty:/bin/false' >> /etc/passwd) \
+ && (grep -q '^sshd:' /etc/group || echo 'sshd:x:74:' >> /etc/group) \
+ && mkdir -p /var/empty && chmod 755 /var/empty
+
+# --- Create user in the image (OOBE is a fallback). The primary group
+# must exist too: s6-setuidgid/s6-envuidgid resolve the user's groups and
+# chown by name fails without it. ---
 RUN echo "${WSL_USER}:x:1000:1000::/home/${WSL_USER}:/bin/login-bash" >> /etc/passwd \
  && echo "${WSL_USER}:!:1::::::" >> /etc/shadow \
+ && (grep -q "^${WSL_USER}:" /etc/group || echo "${WSL_USER}:x:1000:" >> /etc/group) \
  && mkdir -p /home/${WSL_USER} \
  && chown 1000:1000 /home/${WSL_USER} \
  && mkdir -p /etc/sudoers.d \
@@ -114,6 +136,25 @@ RUN FLAKE="${NIXHOME_REF:-path:/etc/nixhome}" \
       /nix/var/nix/profiles/per-user/${WSL_USER} \
       /nix/var/nix/gcroots/per-user/${WSL_USER}
 
+# --- Fontconfig bridge (what devcell's image.nix does). nixpkgs fontconfig
+# looks for /etc/fonts/fonts.conf; without it every X11 app logs "Cannot
+# load default config file" and sees only the bundled DejaVu. The default
+# fonts.conf is copied (not linked, so GC cannot pull it away) and its
+# /etc/fonts/conf.d include is pointed at home-manager's conf.d, which adds
+# the profile's font dirs and the serif/sans/mono aliases. The shared cache
+# dir is world-writable so the first app to run can populate it. ---
+RUN FC="$(ls /nix/store/*-fontconfig-[0-9]*/etc/fonts/fonts.conf 2>/dev/null | head -1)" \
+ && if [ -n "$FC" ] && [ -d /home/${WSL_USER}/.config/fontconfig/conf.d ]; then \
+      mkdir -p /etc/fonts /var/cache/fontconfig \
+      && chmod 1777 /var/cache/fontconfig \
+      && cp "$FC" /etc/fonts/fonts.conf \
+      && ln -sfn /home/${WSL_USER}/.config/fontconfig/conf.d /etc/fonts/conf.d \
+      && if [ -x /home/${WSL_USER}/.nix-profile/bin/fc-cache ]; then \
+           HOME=/home/${WSL_USER} /home/${WSL_USER}/.nix-profile/bin/fc-cache >/dev/null 2>&1 || true; \
+           chown -R 1000:1000 /home/${WSL_USER}/.cache 2>/dev/null || true; \
+         fi; \
+    fi
+
 # --- PATH setup: add nix profile dirs so all shells find nix/HM binaries.
 # WSL1's minimal PATH is /usr/bin:/bin; instead of symlinking every binary
 # there, we extend PATH in profile.d (login shells) and in the s6-init
@@ -122,10 +163,25 @@ RUN printf "export PATH=\"/home/${WSL_USER}/.nix-profile/bin:/nix/var/nix/profil
       > /etc/profile.d/nix-path.sh \
  && chmod +x /etc/profile.d/nix-path.sh
 
+# --- DNS fallback: WSL1 under WinPE regenerates /etc/resolv.conf at every
+# distro start but leaves it without nameservers (the Windows side resolves
+# fine). s6-init runs this before s6-svscan: it prefers the list the
+# WSL1 bootstrap exports to <data disk>\winkit\resolv.conf (visible via
+# drvfs as /mnt/<x>/winkit), then public resolvers. A resolv.conf that
+# already names a server, as on full Windows, is left alone. ---
+RUN printf '#!/bin/sh\n\
+grep -q "^nameserver" /etc/resolv.conf 2>/dev/null && exit 0\n\
+for f in /mnt/*/winkit/resolv.conf; do\n\
+  [ -r "$f" ] && grep -q "^nameserver" "$f" && { cat "$f" >> /etc/resolv.conf; break; }\n\
+done\n\
+grep -q "^nameserver" /etc/resolv.conf || printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" >> /etc/resolv.conf\n' \
+      > /bin/winkit-resolv \
+ && chmod +x /bin/winkit-resolv
+
 # --- s6-init: entry point for "wsl.exe -e /bin/s6-init" (no login shell,
 # so profile.d is not sourced). Sets PATH + LD_PRELOAD, then execs
 # s6-svscan so child run scripts inherit the environment. ---
-RUN printf '#!/bin/sh\n. /etc/profile.d/nix-path.sh\n. /etc/profile.d/ofd-shim.sh\nexec s6-svscan /etc/s6/services\n' \
+RUN printf '#!/bin/sh\n. /etc/profile.d/nix-path.sh\n. /etc/profile.d/ofd-shim.sh\n/bin/winkit-resolv\nexec s6-svscan /etc/s6/services\n' \
       > /bin/s6-init \
  && chmod +x /bin/s6-init
 
@@ -166,8 +222,22 @@ COPY s6/ /etc/s6/services/
 RUN find /etc/s6/services -type f \( -name run -o -name finish \) -exec chmod +x {} +
 
 # --- Fix sudo: nix cannot install setuid binaries (store is user-owned).
-# Copy the real binary to /usr/bin with the setuid bit so "sudo" works. ---
-RUN install -m 4755 -o root -g root \
-      "$(readlink -f /home/${WSL_USER}/.nix-profile/bin/sudo)" /usr/bin/sudo
+# Copy the real binary to /usr/bin with the setuid bit so "sudo" works.
+# The embedded home.nix puts sudo in the profile; a caller's own flake may
+# not, so fall back to nixpkgs' sudo rather than failing the build. ---
+RUN SUDO="$(readlink -f /home/${WSL_USER}/.nix-profile/bin/sudo 2>/dev/null || true)" \
+ && if [ ! -e "$SUDO" ]; then SUDO="$(nix-build '<nixpkgs>' -A sudo --no-out-link)/bin/sudo"; fi \
+ && install -m 4755 -o root -g root "$SUDO" /usr/bin/sudo
+
+# --- Shrink the rootfs before export: build-time inputs (nixpkgs and
+# flake sources, the tarball cache, superseded generations) are dead
+# weight in the guest and inflate distro.wsl and the import on the data
+# disk. The user profile, the default profile and the s6/sshd closure are
+# GC roots and survive. The sanity check fails the build rather than
+# shipping a rootfs whose profile points at a collected store path. ---
+RUN nix-collect-garbage -d \
+ && rm -rf /root/.cache/nix /tmp/* \
+ && test -e "$(readlink -f /home/${WSL_USER}/.nix-profile)" \
+ && test -e "$(readlink -f /nix/var/nix/profiles/default/bin/s6-svscan)"
 
 CMD ["/bin/bash", "-l"]

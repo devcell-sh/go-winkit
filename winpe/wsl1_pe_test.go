@@ -7,50 +7,24 @@ import (
 	"testing"
 )
 
-func TestWSL1PERuntimeHelpersOwnBootstrapAndSSHCLI(t *testing.T) {
+func TestWSL1PERuntimeHelpersContainNonCodeAssets(t *testing.T) {
 	helpers := WSL1PERuntimeHelpers()
 	for _, name := range []string{
-		"prepare-wsl1-disk.txt", "relocate-wsl.ps1", "setup-wsl-user.ps1",
-		"probe-wsl1.ps1", "bootstrap-wsl1.ps1", "status-wsl1.ps1", "invoke-wsl.ps1",
+		"prepare-wsl1-disk.txt",
 		"wsl.cmd",
 	} {
 		if helpers[name] == "" {
 			t.Fatalf("missing helper %s", name)
 		}
 	}
-	bootstrap := helpers["bootstrap-wsl1.ps1"]
-	for _, want := range []string{"add-catalogs", "ensure-service", "ensure-user", "WSLService", "probe-wsl1.ps1", "wsl1-bootstrap.ok"} {
-		if !strings.Contains(bootstrap, want) {
-			t.Errorf("bootstrap missing %q", want)
-		}
-	}
 	for name, helper := range helpers {
 		if strings.Contains(helper, "{{") {
 			t.Errorf("helper %s contains an unresolved template placeholder", name)
 		}
-		for _, forbidden := range []string{"findstr", "sc query", "for /f"} {
-			if strings.Contains(strings.ToLower(helper), forbidden) {
-				t.Errorf("helper %s contains legacy batch parsing %q", name, forbidden)
-			}
-		}
 	}
 	wrapper := helpers["wsl.cmd"]
-	if !strings.Contains(wrapper, "pwsh.exe") || !strings.Contains(wrapper, "invoke-wsl.ps1") || !strings.Contains(wrapper, "%*") {
-		t.Fatalf("SSH wsl shim must immediately delegate arguments to PowerShell:\n%s", wrapper)
-	}
-	if !strings.Contains(helpers["invoke-wsl.ps1"], "run-user") ||
-		!strings.Contains(helpers["invoke-wsl.ps1"], `E:\Program Files\WSL\wsl.exe`) ||
-		!strings.Contains(helpers["invoke-wsl.ps1"], "+ $args") {
-		t.Fatal("PowerShell WSL wrapper must preserve arguments in the WSL user context")
-	}
-	if !strings.Contains(helpers["probe-wsl1.ps1"], "run-user") {
-		t.Fatal("PowerShell probe must launch each wsl.exe operation through the user-token helper")
-	}
-	setupUser := helpers["setup-wsl-user.ps1"]
-	for _, want := range []string{"RuntimePath", "DistroPath", "(OI)(CI)RX", "(OI)(CI)F"} {
-		if !strings.Contains(setupUser, want) {
-			t.Errorf("user setup missing ACL contract %q", want)
-		}
+	if !strings.Contains(wrapper, "winkit-service.exe") || !strings.Contains(wrapper, "run-user") || !strings.Contains(wrapper, "%*") {
+		t.Fatalf("SSH wsl shim must delegate arguments through winkit-service run-user:\n%s", wrapper)
 	}
 }
 

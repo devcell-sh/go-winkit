@@ -96,6 +96,7 @@ func TestExamplePEWSL1Alpine_E2E(t *testing.T) {
 		Accel:    os.Getenv("WINKIT_E2E_ACCEL"),
 		SSHPort:  peSSHPort,
 		RDPPort:  25389,
+		VNCPort:  5901,
 	})
 	require.NoError(t, err, "CLI artifact must boot via winkit.Start")
 	defer machine.Stop()
@@ -114,16 +115,8 @@ func TestExamplePEWSL1Alpine_E2E(t *testing.T) {
 		return string(stdout) + string(stderr)
 	}
 
-	// gosshd owns the WinPE shell lifetime while bootstrap runs alongside it.
-	// Wait for the explicit production marker before making WSL assertions.
 	waitForPEWSL1Bootstrap(t, ctx, client)
-	bootstrap := run(`pwsh -NoLogo -NoProfile -NonInteractive -File X:\winkit\status-wsl1.ps1`)
-	require.Contains(t, bootstrap, "WSL1_BOOTSTRAP_OK")
 
-	// The bootstrap probe already ran WSL commands as the winkit user and
-	// wrote results to E:\winkit\*.out. Verify those files directly: this
-	// matches the production contract (probe-wsl1.ps1 is the authority)
-	// and avoids CreateProcessAsUser path-with-spaces issues through SSH.
 	list := strings.ReplaceAll(run(`type E:\winkit\list.out`), "\x00", "")
 	require.Regexp(t, `(?mi)winkit\s+(stopped|running)\s+1\s*$`, list,
 		"the imported distro must be WSL1: %s", list)
@@ -229,8 +222,6 @@ func TestPEWSL1Alpine_OfflineImport_E2E(t *testing.T) {
 	}
 
 	waitForPEWSL1Bootstrap(t, ctx, client)
-	bootstrap := run(`pwsh -NoLogo -NoProfile -NonInteractive -File X:\winkit\status-wsl1.ps1`)
-	require.Contains(t, bootstrap, "WSL1_BOOTSTRAP_OK")
 
 	list := strings.ReplaceAll(run(`type E:\winkit\list.out`), "\x00", "")
 	require.Regexp(t, `(?mi)winkit\s+(stopped|running)\s+1\s*$`, list,
@@ -263,18 +254,21 @@ func waitForPEWSL1Bootstrap(t *testing.T, ctx context.Context, client *gosshd.Cl
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Minute)
 	for time.Now().Before(deadline) {
-		stdout, stderr, code, err := client.Run(ctx,
-			`pwsh -NoLogo -NoProfile -NonInteractive -File X:\winkit\status-wsl1.ps1`)
+		stdout, _, code, err := client.Run(ctx,
+			`type X:\winkit\wsl1-bootstrap.ok`)
 		if err != nil {
 			t.Fatalf("SSH connection failed while waiting for WSL1 bootstrap: %v", err)
 		}
-		out := string(stdout) + string(stderr)
-		if code == 0 && strings.Contains(out, "WSL1_BOOTSTRAP_OK") {
+		if code == 0 && strings.Contains(string(stdout), "WSL1_BOOTSTRAP_OK") {
 			return
 		}
-		if strings.Contains(out, "WSL1_BOOTSTRAP_FAILED") {
-			t.Fatalf("WSL1 bootstrap failed:\n%s", out)
+
+		stdout2, _, code2, _ := client.Run(ctx,
+			`type X:\winkit\wsl1-bootstrap.failed`)
+		if code2 == 0 {
+			t.Fatalf("WSL1 bootstrap failed:\n%s", string(stdout2))
 		}
+
 		select {
 		case <-ctx.Done():
 			t.Fatalf("context expired waiting for WSL1 bootstrap: %v", ctx.Err())

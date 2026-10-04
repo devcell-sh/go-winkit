@@ -87,12 +87,27 @@ RUN if command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ]; then \
 COPY s6/ /etc/s6/services/
 RUN find /etc/s6/services -type f \( -name run -o -name finish \) -exec chmod +x {} +
 
+# --- DNS fallback: WSL1 under WinPE regenerates /etc/resolv.conf at every
+# distro start but leaves it without nameservers (the Windows side resolves
+# fine). s6-init runs this before s6-svscan: it prefers the list the
+# WSL1 bootstrap exports to <data disk>\winkit\resolv.conf (visible via
+# drvfs as /mnt/<x>/winkit), then public resolvers. A resolv.conf that
+# already names a server, as on full Windows, is left alone. ---
+RUN printf '#!/bin/sh\n\
+grep -q "^nameserver" /etc/resolv.conf 2>/dev/null && exit 0\n\
+for f in /mnt/*/winkit/resolv.conf; do\n\
+  [ -r "$f" ] && grep -q "^nameserver" "$f" && { cat "$f" >> /etc/resolv.conf; break; }\n\
+done\n\
+grep -q "^nameserver" /etc/resolv.conf || printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" >> /etc/resolv.conf\n' \
+      > /bin/winkit-resolv \
+ && chmod +x /bin/winkit-resolv
+
 # --- /bin/s6-init: the Windows bootstrap registers a boot task that runs
 # "wsl.exe -e /bin/s6-init", so the entry point must exist on every image.
 # s6-svscan supervises everything under /etc/s6/services when s6 is
 # installed; otherwise fall back to exec'ing sshd directly (no supervision,
 # still a working 2223); a base with neither just parks. ---
-RUN printf '#!/bin/sh\nif command -v s6-svscan >/dev/null 2>&1; then exec s6-svscan /etc/s6/services; fi\nif command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ]; then exec /etc/s6/services/sshd/run; fi\nexec sleep infinity\n' \
+RUN printf '#!/bin/sh\n/bin/winkit-resolv\nif command -v s6-svscan >/dev/null 2>&1; then exec s6-svscan /etc/s6/services; fi\nif command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ]; then exec /etc/s6/services/sshd/run; fi\nexec sleep infinity\n' \
       > /bin/s6-init \
  && chmod +x /bin/s6-init
 

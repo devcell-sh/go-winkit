@@ -1,2 +1,4 @@
 #!/bin/sh
-exec sshd -D -e -f /etc/ssh/sshd_config 2>&1
+# OpenSSH refuses to start unless invoked by absolute path (it re-execs
+# itself per connection). PATH carries the nix profile via /bin/s6-init.
+exec "$(command -v sshd)" -D -e -f /etc/ssh/sshd_config 2>&1

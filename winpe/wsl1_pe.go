@@ -9,10 +9,10 @@ import (
 )
 
 const (
-	// WSL1PEStartupCommand starts the PowerShell-owned first-boot provisioner.
-	// The base image launches it concurrently so gosshd remains available for
-	// progress and failure diagnostics while provisioning runs.
-	WSL1PEStartupCommand = `X:\winkit\pwsh\pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File X:\winkit\bootstrap-wsl1.ps1`
+	// WSL1PEStartupCommand triggers the native Go WSL1 bootstrap inside
+	// winkit-service init. The command string is only used as a non-empty
+	// marker: init.go calls runBootstrapWSL1 directly in-process.
+	WSL1PEStartupCommand = `X:\winkit\winkit-service.exe bootstrap-wsl1`
 	WSL1PEDistroName     = "winkit"
 	WSL1PEUserName       = "winkit"
 	wsl1PEUserPassword   = "Winkit1234"
@@ -22,14 +22,7 @@ const (
 var wsl1PERuntimeFS embed.FS
 
 var wsl1PERuntimeFiles = []string{
-	"patch-ramdisk-bpb.ps1",
 	"prepare-wsl1-disk.txt",
-	"relocate-wsl.ps1",
-	"setup-wsl-user.ps1",
-	"probe-wsl1.ps1",
-	"bootstrap-wsl1.ps1",
-	"status-wsl1.ps1",
-	"invoke-wsl.ps1",
 	"wsl.cmd",
 }
 
@@ -61,8 +54,8 @@ func WSL1PEPatchSet(workDir, wslDir string) (WimPatchSet, error) {
 }
 
 // WSL1PERuntimeHelpers returns the embedded guest runtime staged into
-// boot.wim. PowerShell owns provisioning and WSL invocation. The sole CMD
-// file only makes the conventional `wsl` command name resolvable by cmd.exe.
+// boot.wim. The Go bootstrap-wsl1 verb handles provisioning; these files
+// are non-code helpers (diskpart script, wsl.cmd shim).
 func WSL1PERuntimeHelpers() map[string]string {
 	replacer := strings.NewReplacer(
 		"{{DISTRO_NAME}}", WSL1PEDistroName,

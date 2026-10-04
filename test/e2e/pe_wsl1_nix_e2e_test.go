@@ -83,6 +83,7 @@ func TestExamplePEWSL1Nix_E2E(t *testing.T) {
 		Accel:    os.Getenv("WINKIT_E2E_ACCEL"),
 		SSHPort:  peSSHPort,
 		RDPPort:  25390,
+		VNCPort:  5902,
 	})
 	require.NoError(t, err, "CLI artifact must boot via winkit.Start")
 	defer machine.Stop()
@@ -102,11 +103,7 @@ func TestExamplePEWSL1Nix_E2E(t *testing.T) {
 	}
 
 	waitForPEWSL1Bootstrap(t, ctx, client)
-	bootstrap := run(`pwsh -NoLogo -NoProfile -NonInteractive -File X:\winkit\status-wsl1.ps1`)
-	require.Contains(t, bootstrap, "WSL1_BOOTSTRAP_OK")
 
-	// Verify probe outputs: the probe runs WSL commands as the winkit user
-	// and writes results to E:\winkit\*.out.
 	list := strings.ReplaceAll(run(`type E:\winkit\list.out`), "\x00", "")
 	require.Regexp(t, `(?mi)winkit\s+(stopped|running)\s+1\s*$`, list,
 		"the imported distro must be WSL1: %s", list)
