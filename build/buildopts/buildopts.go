@@ -135,11 +135,29 @@ func (p Ports) OpenSSHOrDefault() uint16 {
 	return DefaultOpenSSHPort
 }
 
+// Packages lists packages to install via external package managers
+// during the bootstrap phase of a PE build.
+type Packages struct {
+	Chocolatey []string
+}
+
+// NeedsNetFx returns true if any package manager requires .NET Framework.
+func (p Packages) NeedsNetFx() bool {
+	return len(p.Chocolatey) > 0
+}
+
+// NeedsWoW64 returns true if packages may contain x86/x64 binaries that
+// need WoW64 emulation on ARM64 WinPE.
+func (p Packages) NeedsWoW64() bool {
+	return len(p.Chocolatey) > 0
+}
+
 type BuildOpts struct {
 	From             string
 	PE               bool
 	DWM              bool
 	WSL              *WSLConfig
+	Packages         Packages
 	Features         []string
 	Hooks            []Hook
 	Ports            Ports

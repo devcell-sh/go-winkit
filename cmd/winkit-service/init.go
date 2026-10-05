@@ -35,6 +35,9 @@ type initConfig struct {
 	// are ready. Not set by default: populate init.json to enable.
 	DesktopShell     string   `json:"desktopShell,omitempty"`
 	DesktopShellArgs []string `json:"desktopShellArgs,omitempty"`
+	// ChocolateyPackages lists packages to install via chocolatey during
+	// the bootstrap phase. Each entry is a chocolatey package name.
+	ChocolateyPackages []string `json:"chocolateyPackages,omitempty"`
 }
 
 func parseInitConfig(data []byte) (*initConfig, error) {
@@ -201,8 +204,20 @@ func runInit(configPath string) error {
 			initLog(out, "bootstrap-wsl1", "starting WSL1 bootstrap (native Go)")
 			if err := runBootstrapWSL1(out, bsCfg); err != nil {
 				initLog(out, "bootstrap-wsl1-error", fmt.Sprintf("WSL1 bootstrap failed: %v", err))
+				initLog(out, "init-bootstrap-failed", fmt.Sprintf("bootstrap failed: %v", err))
 			} else {
 				initLog(out, "bootstrap-wsl1-ok", "WSL1 bootstrap complete")
+
+				if len(cfg.ChocolateyPackages) > 0 {
+					initLog(out, "choco-bootstrap", "installing chocolatey packages")
+					if err := runChocolateyBootstrap(out, cfg.ChocolateyPackages, bsCfg.DriveLetter); err != nil {
+						initLog(out, "choco-bootstrap-error", fmt.Sprintf("chocolatey: %v (non-fatal)", err))
+					} else {
+						initLog(out, "choco-bootstrap-ok", "chocolatey packages installed")
+					}
+				}
+
+				initLog(out, "init-bootstrap-complete", "all bootstrap phases complete")
 			}
 		}
 		if len(cfg.WSL1S6) > 0 {

@@ -551,6 +551,211 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0o644)
 }
 
+// TransferNetFxFiles extracts .NET Framework files from install.wim (image 1)
+// and injects them into boot.wim (image 2). This provides the CLR and BCL
+// that managed assemblies (e.g. choco.exe) need to run in WinPE.
+func TransferNetFxFiles(installWimPath, bootWimPath string) ([]string, error) {
+	if !wimlib.Available() {
+		return nil, fmt.Errorf("wimlib not available: build with CGO_ENABLED=1 and install libwim")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "netfx-extract-*")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	src, err := wimlib.OpenWIM(installWimPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening install.wim: %w", err)
+	}
+	defer src.Close()
+
+	for _, wp := range NetFxSystem32Paths {
+		_ = src.ExtractPaths(1, tmpDir, []string{wp})
+	}
+
+	for _, wp := range NetFxTreePaths {
+		_ = src.ExtractPaths(1, tmpDir, []string{wp})
+	}
+
+	winsxsEntries, err := src.ListChildren(1, `\Windows\WinSxS`)
+	if err != nil {
+		return nil, fmt.Errorf("listing WinSxS: %w", err)
+	}
+	for _, entry := range winsxsEntries {
+		el := strings.ToLower(entry)
+		if !containsAny(el, NetFxWinSxSKeywords) {
+			continue
+		}
+		_ = src.ExtractPaths(1, tmpDir, []string{`\Windows\WinSxS\` + entry})
+	}
+
+	metadataSets := []struct {
+		dir      string
+		keywords []string
+	}{
+		{dir: `\Windows\WinSxS\Manifests`, keywords: NetFxWinSxSKeywords},
+		{dir: `\Windows\servicing\Packages`, keywords: NetFxServicingPackageKeywords},
+	}
+	for _, set := range metadataSets {
+		entries, listErr := src.ListChildren(1, set.dir)
+		if listErr != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !containsAny(strings.ToLower(entry), set.keywords) {
+				continue
+			}
+			_ = src.ExtractPaths(1, tmpDir, []string{set.dir + `\` + entry})
+		}
+	}
+
+	if err := materializeDCSFiles(tmpDir); err != nil {
+		return nil, fmt.Errorf("materializing .NET Framework component payloads: %w", err)
+	}
+
+	src.Close()
+
+	var injections []string
+	err = filepath.Walk(tmpDir, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() {
+			return werr
+		}
+		rel, _ := filepath.Rel(tmpDir, path)
+		wimTarget := `\` + strings.ReplaceAll(filepath.ToSlash(rel), `/`, `\`)
+		injections = append(injections, wimTarget)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking extracted .NET Framework files: %w", err)
+	}
+	if len(injections) == 0 {
+		return nil, fmt.Errorf("no .NET Framework files found in install.wim")
+	}
+
+	dst, err := wimlib.OpenWIM(bootWimPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening boot.wim: %w", err)
+	}
+	defer dst.Close()
+
+	windowsTree := filepath.Join(tmpDir, "Windows")
+	if err := dst.UpdateImageAddTree(2, windowsTree, `\Windows`); err != nil {
+		return nil, fmt.Errorf("injecting .NET Framework tree into boot.wim: %w", err)
+	}
+
+	if err := dst.Overwrite(); err != nil {
+		return nil, fmt.Errorf("overwriting boot.wim: %w", err)
+	}
+	return injections, nil
+}
+
+// TransferWoW64Files extracts the WoW64 subsystem and ARM64 x64/x86
+// emulation files from install.wim (image 1) and injects them into
+// boot.wim (image 2). This enables running x86/x64 binaries on ARM64
+// WinPE via xtajit64.dll (x64 JIT) and xtajit.dll (x86 JIT).
+func TransferWoW64Files(installWimPath, bootWimPath string) ([]string, error) {
+	if !wimlib.Available() {
+		return nil, fmt.Errorf("wimlib not available: build with CGO_ENABLED=1 and install libwim")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "wow64-extract-*")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	src, err := wimlib.OpenWIM(installWimPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening install.wim: %w", err)
+	}
+	defer src.Close()
+
+	for _, wp := range WoW64System32Paths {
+		_ = src.ExtractPaths(1, tmpDir, []string{wp})
+	}
+
+	for _, wp := range WoW64SysWOW64Paths {
+		_ = src.ExtractPaths(1, tmpDir, []string{wp})
+	}
+
+	for _, wp := range WoW64TreePaths {
+		_ = src.ExtractPaths(1, tmpDir, []string{wp})
+	}
+
+	winsxsEntries, err := src.ListChildren(1, `\Windows\WinSxS`)
+	if err != nil {
+		return nil, fmt.Errorf("listing WinSxS: %w", err)
+	}
+	for _, entry := range winsxsEntries {
+		el := strings.ToLower(entry)
+		if !containsAny(el, WoW64WinSxSKeywords) {
+			continue
+		}
+		_ = src.ExtractPaths(1, tmpDir, []string{`\Windows\WinSxS\` + entry})
+	}
+
+	metadataSets := []struct {
+		dir      string
+		keywords []string
+	}{
+		{dir: `\Windows\WinSxS\Manifests`, keywords: WoW64WinSxSKeywords},
+		{dir: `\Windows\servicing\Packages`, keywords: WoW64ServicingPackageKeywords},
+	}
+	for _, set := range metadataSets {
+		entries, listErr := src.ListChildren(1, set.dir)
+		if listErr != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !containsAny(strings.ToLower(entry), set.keywords) {
+				continue
+			}
+			_ = src.ExtractPaths(1, tmpDir, []string{set.dir + `\` + entry})
+		}
+	}
+
+	if err := materializeDCSFiles(tmpDir); err != nil {
+		return nil, fmt.Errorf("materializing WoW64 component payloads: %w", err)
+	}
+
+	src.Close()
+
+	var injections []string
+	err = filepath.Walk(tmpDir, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() {
+			return werr
+		}
+		rel, _ := filepath.Rel(tmpDir, path)
+		wimTarget := `\` + strings.ReplaceAll(filepath.ToSlash(rel), `/`, `\`)
+		injections = append(injections, wimTarget)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking extracted WoW64 files: %w", err)
+	}
+	if len(injections) == 0 {
+		return nil, fmt.Errorf("no WoW64 files found in install.wim")
+	}
+
+	dst, err := wimlib.OpenWIM(bootWimPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening boot.wim: %w", err)
+	}
+	defer dst.Close()
+
+	windowsTree := filepath.Join(tmpDir, "Windows")
+	if err := dst.UpdateImageAddTree(2, windowsTree, `\Windows`); err != nil {
+		return nil, fmt.Errorf("injecting WoW64 tree into boot.wim: %w", err)
+	}
+
+	if err := dst.Overwrite(); err != nil {
+		return nil, fmt.Errorf("overwriting boot.wim: %w", err)
+	}
+	return injections, nil
+}
+
 // PatchDevcellWim applies registry patches to an on-disk WIM file (typically
 // winkit.wim after DISM offline servicing). This is the host-side post-step
 // that sets correct Start values for services created or updated by DISM.

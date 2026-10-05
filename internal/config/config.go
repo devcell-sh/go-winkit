@@ -87,18 +87,24 @@ func ParseForward(spec string) (host, guest int, err error) {
 	return int(h), int(g), err
 }
 
+// PackagesConfig lists packages to install via external package managers.
+type PackagesConfig struct {
+	Chocolatey []string `yaml:"chocolatey"`
+}
+
 type Config struct {
-	From             string         `yaml:"from"`
-	Hostname         string         `yaml:"hostname"`
-	PE               bool           `yaml:"pe"`
-	DWM              *bool          `yaml:"dwm"`
-	WSL              *WSLConfig     `yaml:"wsl"`
-	Features         []string       `yaml:"features"`
-	Files            []FileEntry    `yaml:"files"`
-	Ports            *PortsConfig   `yaml:"ports"`
-	Vagrant          *VagrantConfig `yaml:"vagrant"`
-	BootstrapOnBuild bool           `yaml:"bootstrap_on_build"`
-	Commands         commandsField  `yaml:"-"`
+	From             string          `yaml:"from"`
+	Hostname         string          `yaml:"hostname"`
+	PE               bool            `yaml:"pe"`
+	DWM              *bool           `yaml:"dwm"`
+	WSL              *WSLConfig      `yaml:"wsl"`
+	Packages         *PackagesConfig `yaml:"packages"`
+	Features         []string        `yaml:"features"`
+	Files            []FileEntry     `yaml:"files"`
+	Ports            *PortsConfig    `yaml:"ports"`
+	Vagrant          *VagrantConfig  `yaml:"vagrant"`
+	BootstrapOnBuild bool            `yaml:"bootstrap_on_build"`
+	Commands         commandsField   `yaml:"-"`
 }
 
 type commandsField struct {
@@ -107,16 +113,17 @@ type commandsField struct {
 
 func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	type plain struct {
-		From             string         `yaml:"from"`
-		Hostname         string         `yaml:"hostname"`
-		PE               bool           `yaml:"pe"`
-		DWM              *bool          `yaml:"dwm"`
-		WSL              *WSLConfig     `yaml:"wsl"`
-		Features         []string       `yaml:"features"`
-		Files            []FileEntry    `yaml:"files"`
-		Ports            *PortsConfig   `yaml:"ports"`
-		Vagrant          *VagrantConfig `yaml:"vagrant"`
-		BootstrapOnBuild bool           `yaml:"bootstrap_on_build"`
+		From             string          `yaml:"from"`
+		Hostname         string          `yaml:"hostname"`
+		PE               bool            `yaml:"pe"`
+		DWM              *bool           `yaml:"dwm"`
+		WSL              *WSLConfig      `yaml:"wsl"`
+		Packages         *PackagesConfig `yaml:"packages"`
+		Features         []string        `yaml:"features"`
+		Files            []FileEntry     `yaml:"files"`
+		Ports            *PortsConfig    `yaml:"ports"`
+		Vagrant          *VagrantConfig  `yaml:"vagrant"`
+		BootstrapOnBuild bool            `yaml:"bootstrap_on_build"`
 	}
 
 	var p plain
@@ -128,6 +135,7 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	c.PE = p.PE
 	c.DWM = p.DWM
 	c.WSL = p.WSL
+	c.Packages = p.Packages
 	c.Features = p.Features
 	c.Files = p.Files
 	c.Ports = p.Ports

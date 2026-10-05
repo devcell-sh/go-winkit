@@ -432,6 +432,18 @@ func importAndProbeDistro(out io.Writer, cfg wsl1BootstrapConfig) error {
 // required for WSL to work: kernel drivers, WSL registry entries, WSLService,
 // and the user's registry hive (which contains the Lxss distro registration).
 func activateWSL1(out io.Writer, cfg wsl1BootstrapConfig) error {
+	// The boot.wim SYSTEM hive has PagingFiles cleared so Session Manager
+	// does not auto-create a pagefile. Create one on the persistent data
+	// disk via wpeutil. The file may already exist from a previous boot
+	// but that's fine: wpeutil configures the pagefile in memory.
+	pagePath := fmt.Sprintf("%c:\\pagefile.sys", cfg.DriveLetter)
+	bootstrapLog(out, "activate-pagefile", fmt.Sprintf("creating pagefile at %s via wpeutil", pagePath))
+	if err := runChecked(out, "wpeutil", "CreatePageFile", "/path="+pagePath, "/size=4096"); err != nil {
+		bootstrapLog(out, "activate-pagefile-warn", fmt.Sprintf("wpeutil CreatePageFile: %v (WSL may fail)", err))
+	} else {
+		bootstrapLog(out, "activate-pagefile-ok", fmt.Sprintf("4 GB pagefile active at %s", pagePath))
+	}
+
 	// Kernel services needed for WSL1.
 	for _, svc := range []string{"bfs", "bindflt", "afunix", "wcifs", "P9Rdr"} {
 		bootstrapLog(out, "activate-svc", fmt.Sprintf("ensuring service %s", svc))

@@ -14,6 +14,14 @@ func TransferDWMFiles(installWimPath, bootWimPath string) ([]string, error) {
 	return nil, errNoWimlib
 }
 
+func TransferNetFxFiles(installWimPath, bootWimPath string) ([]string, error) {
+	return nil, errNoWimlib
+}
+
+func TransferWoW64Files(installWimPath, bootWimPath string) ([]string, error) {
+	return nil, errNoWimlib
+}
+
 func PatchDevcellWim(wimPath string, imageNum int, registryPatches ...RegistryPatch) error {
 	return errNoWimlib
 }

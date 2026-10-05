@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "kind": "pe-wsl1",
+  "boot_volume": "winkit-pe-wsl.qcow2",
+  "data_disk": "winkit-pe-wsl-data.qcow2",
+  "forwards": [
+    "25900:5900"
+  ]
+}

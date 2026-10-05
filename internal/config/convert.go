@@ -27,6 +27,12 @@ func (c *Config) ToBuildOpts() (*buildopts.BuildOpts, error) {
 		BootstrapOnBuild: c.BootstrapOnBuild,
 	}
 
+	if c.Packages != nil {
+		opts.Packages = buildopts.Packages{
+			Chocolatey: c.Packages.Chocolatey,
+		}
+	}
+
 	if c.WSL != nil {
 		opts.WSL = &buildopts.WSLConfig{
 			Image:       c.WSL.Image,

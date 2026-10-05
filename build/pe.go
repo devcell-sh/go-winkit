@@ -121,6 +121,9 @@ func PE(ctx context.Context, c Config) error {
 		ContentShellFiles: contentShellFiles,
 		WorkDir:           c.WorkDir,
 	}
+	if c.Opts != nil {
+		baseCfg.ChocolateyPackages = c.Opts.Packages.Chocolatey
+	}
 	if wsl1 {
 		baseCfg.StartupCommand = winpe.WSL1PEStartupCommand
 	}
@@ -175,6 +178,29 @@ func PE(ctx context.Context, c Config) error {
 			return fmt.Errorf("transferring DWM components: %w", err)
 		}
 		logger.Debug("transferred DWM components", "files", len(dwmTransferred))
+	}
+
+	pkgs := c.Opts.Packages
+	if pkgs.NeedsNetFx() {
+		logger.Info("transferring .NET Framework into boot.wim")
+		netfxTransferred, err := winpe.TransferNetFxFiles(installWimPath, bootWimPath)
+		if err != nil {
+			return fmt.Errorf("transferring .NET Framework: %w", err)
+		}
+		logger.Debug("transferred .NET Framework components", "files", len(netfxTransferred))
+	}
+	if pkgs.NeedsWoW64() {
+		logger.Info("transferring WoW64 x64 emulation into boot.wim")
+		wow64Transferred, err := winpe.TransferWoW64Files(installWimPath, bootWimPath)
+		if err != nil {
+			return fmt.Errorf("transferring WoW64 components: %w", err)
+		}
+		logger.Debug("transferred WoW64 components", "files", len(wow64Transferred))
+	}
+
+	logger.Info("patching boot.wim pagefile to use persistent data disk")
+	if err := winpe.PatchWIM(bootWimPath, winpe.PagefilePatchSet()); err != nil {
+		return fmt.Errorf("patching pagefile registry: %w", err)
 	}
 
 	wslDir, err := winpe.FetchWSL1Engine(ctx, c.CacheDir, c.NoCache, func(f string, a ...any) {
@@ -339,7 +365,7 @@ func BootstrapPE(ctx context.Context, c Config, bootVolume, dataDisk string) err
 	qmpSock := qemu.QMPSocketFromVM(machine)
 
 	logger.Info("bootstrap: waiting for WSL1 bootstrap to complete", "guest_log", guestJSONL)
-	err = waitForBootstrapEvent(ctx, guestJSONL, machine.Done(), 30*time.Minute)
+	err = waitForBootstrapEvent(ctx, guestJSONL, machine.Done(), 45*time.Minute)
 
 	if err == nil {
 		logger.Info("bootstrap: event received, waiting for guest filesystem flush")
@@ -412,13 +438,10 @@ func scanForEvent(logPath string, offset *int64) (error, bool) {
 			continue
 		}
 		switch ev.Event {
-		case "wsl1-bootstrap-ok", "bootstrap-wsl1-ok":
+		case "init-bootstrap-complete":
 			return nil, true
-		case "wsl1-bootstrap-failed", "bootstrap-wsl1-error":
+		case "init-bootstrap-failed", "wsl1-bootstrap-failed", "bootstrap-wsl1-error":
 			return fmt.Errorf("bootstrap failed: %s", ev.Msg), true
-		}
-		if strings.Contains(ev.Msg, "WSL1_BOOTSTRAP_OK") {
-			return nil, true
 		}
 		if strings.Contains(ev.Msg, "WSL1_BOOTSTRAP_FAILED") {
 			return fmt.Errorf("bootstrap failed: %s", ev.Msg), true

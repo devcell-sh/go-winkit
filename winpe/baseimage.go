@@ -65,6 +65,10 @@ type BaseImageConfig struct {
 	// gosshd remains the foreground lifetime process and callers can inspect
 	// bootstrap progress and failures over SSH.
 	StartupCommand string
+	// ChocolateyPackages lists packages to install via chocolatey during the
+	// bootstrap phase. Requires .NET Framework and (on ARM64) WoW64 to be
+	// present in boot.wim.
+	ChocolateyPackages []string
 }
 
 // BuildBaseImageFiles produces the FAT-volume file map for a self-contained
@@ -175,6 +179,7 @@ func BuildBaseImageFiles(cfg BaseImageConfig) (map[string][]byte, error) {
 			infs, cfg.GosshdAddr,
 			WSL1PEUserName, wsl1PEUserPassword,
 			wsl1Bootstrap, desktopShell, desktopShellArgs,
+			cfg.ChocolateyPackages,
 		)
 		payload["winpeshl.ini"] = []byte("[LaunchApps]\r\n" +
 			`X:\winkit\` + ServiceVolumeName + " init --config X:\\winkit\\" + InitManifestName + "\r\n")
@@ -293,7 +298,8 @@ type initManifest struct {
 	WSL1Bootstrap    string   `json:"wsl1Bootstrap,omitempty"`
 	WSL1CatalogDir   string   `json:"wsl1CatalogDir,omitempty"`
 	WSL1Services     []string `json:"wsl1Services,omitempty"`
-	WSL1S6           []string `json:"wsl1S6,omitempty"`
+	WSL1S6             []string `json:"wsl1S6,omitempty"`
+	ChocolateyPackages []string `json:"chocolateyPackages,omitempty"`
 }
 
 // wsl1KernelServices are the kernel drivers that must be running before
@@ -302,7 +308,7 @@ type initManifest struct {
 var wsl1KernelServices = []string{"bfs", "bindflt", "afunix", "wcifs", "P9Rdr"}
 
 // GenerateInitManifest produces the init.json that winkit-service init reads.
-func GenerateInitManifest(driverINFs []string, gosshdAddr, user, password, wsl1Bootstrap, desktopShell string, desktopShellArgs []string) []byte {
+func GenerateInitManifest(driverINFs []string, gosshdAddr, user, password, wsl1Bootstrap, desktopShell string, desktopShellArgs, chocolateyPkgs []string) []byte {
 	sort.Strings(driverINFs)
 	m := initManifest{
 		Drivers:          driverINFs,
@@ -322,6 +328,7 @@ func GenerateInitManifest(driverINFs []string, gosshdAddr, user, password, wsl1B
 		// runs s6 through that wsl.exe under the winkit user.
 		m.WSL1S6 = []string{`E:\Program Files\WSL\wsl.exe`, "-d", WSL1PEDistroName, "-u", "root", "-e", "/bin/s6-init"}
 	}
+	m.ChocolateyPackages = chocolateyPkgs
 	data, _ := json.MarshalIndent(m, "", "  ")
 	return data
 }

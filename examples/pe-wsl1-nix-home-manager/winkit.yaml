@@ -12,10 +12,10 @@ pe: true
 dwm: false
 bootstrap_on_build: true
 
-# packages:
-#   chocolatey:
-#     - TotalCommander
-# nuget:
+packages:
+  chocolatey:
+    - 7zip
+    - totalcommander
 wsl:
   image: nix
   # Local flake that composes homeConfigurations.winkit out of the
