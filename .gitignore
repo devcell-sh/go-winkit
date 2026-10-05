@@ -34,7 +34,25 @@ go.work.sum
 # devcell container config
 .devcell/
 .devcell.toml
+.devcell.toml.bak*
 .rendered-ps1/
+
+# Task runner state
+.task/
+
+# Downloaded payloads (Chromium, WebView2, PowerShell)
+chromium-arm64-*/
+webview2-arm64-*/
+PowerShell-*.zip
+
+# Build tool outputs (WSL rootfs, etc.)
+.tools/out/
+
+# node_modules (implorer frontend)
+implorer/frontend/node_modules/
+
+# Compiled guest binaries at repo root
+/winkit-service
 
 # winkit runtime state (debug logs, VM run dirs, guest SFTP marker)
 .winkit/
