@@ -163,6 +163,8 @@ type BuildOpts struct {
 	Ports            Ports
 	Hostname         string
 	BootstrapOnBuild bool
+	WallpaperName    string
+	WallpaperData    []byte
 }
 
 func (o *BuildOpts) Validate() error {

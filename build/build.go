@@ -85,12 +85,16 @@ func (c Config) logger() *slog.Logger {
 func WSL(ctx context.Context, c Config) error {
 	var ports buildopts.Ports
 	hostname := ""
+	var wallpaperName string
+	var wallpaperData []byte
 	if c.Opts != nil {
 		ports = c.Opts.Ports
 		hostname = c.Opts.Hostname
+		wallpaperName = c.Opts.WallpaperName
+		wallpaperData = c.Opts.WallpaperData
 	}
 	return wslImage(ctx, c.Dest, c.CacheDir, c.WindowsISO, c.VirtIOISO, c.WorkDir,
-		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.WSLServices, c.DisplayType, ports, hostname, c.StructuredLogPath)
+		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.WSLServices, c.DisplayType, ports, hostname, c.StructuredLogPath, wallpaperName, wallpaperData)
 }
 
 // Base performs a full unattended install running the hooks and features

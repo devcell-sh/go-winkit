@@ -406,14 +406,18 @@ Invoke-Step 'install WSL package' {
     $msiUrl = "https://github.com/microsoft/WSL/releases/download/$ver/wsl.$ver.0.$arch.msi"
     $msiPath = Join-Path $env:TEMP 'wsl.msi'
     $ProgressPreference = 'SilentlyContinue'
+    winkit-json @{ event = 'wsl_package'; stage = 'download'; url = $msiUrl }
     Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing
+    winkit-json @{ event = 'wsl_package'; stage = 'msiexec'; status = 'start' }
     $p = Start-Process msiexec.exe -PassThru -ArgumentList '/i', $msiPath, '/quiet', '/qn', '/norestart'
     $p.WaitForExit(300000)
+    winkit-json @{ event = 'wsl_package'; stage = 'msiexec'; exit_code = $p.ExitCode }
     if ($p.ExitCode -ne 0) { throw "msiexec exited $($p.ExitCode)" }
     # wsl.exe prints UTF-16LE; WSL_UTF8=1 makes its output readable when
     # captured (without it every log line arrives NUL-interleaved).
     $env:WSL_UTF8 = '1'
     $wslVer = & wsl.exe --version 2>&1 | Select-Object -First 1
+    winkit-json @{ event = 'wsl_package'; stage = 'verify'; version = "$wslVer" }
     Send-Progress "WSL installed: $wslVer"
 }
 
@@ -429,9 +433,11 @@ Invoke-Step 'import WSL1 distro' {
         }
     }
     if (-not $wslFile) {
+        winkit-json @{ event = 'wsl_import'; stage = 'locate_distro'; status = 'not_found' }
         Send-Progress 'no distro.wsl found on any drive; skipping WSL1 import'
         return
     }
+    winkit-json @{ event = 'wsl_import'; stage = 'locate_distro'; status = 'ok'; path = $wslFile }
     Send-Progress "found $wslFile"
     $distro = '{{.DistroName}}'
     $installDir = "C:\$distro"
@@ -444,14 +450,23 @@ Invoke-Step 'import WSL1 distro' {
     $defaultOut = (& wsl.exe --set-default-version 1 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) { throw "wsl --set-default-version 1 exited $LASTEXITCODE -- $defaultOut" }
 
+    winkit-json @{ event = 'wsl_import'; stage = 'import'; distro = $distro; status = 'start' }
     $importOut = (& wsl.exe --import $distro $installDir $wslFile --version 1 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) { throw "wsl --import exited $LASTEXITCODE -- $importOut" }
+    if ($LASTEXITCODE -ne 0) {
+        winkit-json @{ event = 'wsl_import'; stage = 'import'; distro = $distro; status = 'fail'; exit_code = $LASTEXITCODE; output = $importOut }
+        throw "wsl --import exited $LASTEXITCODE -- $importOut"
+    }
+    winkit-json @{ event = 'wsl_import'; stage = 'import'; distro = $distro; status = 'ok' }
 
     # Enforce the requested version even if a future wsl.exe changes import
     # defaults or ignores a trailing --version option. This is intentionally
     # redundant with --import --version 1.
     $convertOut = (& wsl.exe --set-version $distro 1 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) { throw "wsl --set-version $distro 1 exited $LASTEXITCODE -- $convertOut" }
+    if ($LASTEXITCODE -ne 0) {
+        winkit-json @{ event = 'wsl_import'; stage = 'set-version'; distro = $distro; status = 'fail'; exit_code = $LASTEXITCODE; output = $convertOut }
+        throw "wsl --set-version $distro 1 exited $LASTEXITCODE -- $convertOut"
+    }
+    winkit-json @{ event = 'wsl_import'; stage = 'set-version'; distro = $distro; status = 'ok' }
 
     # WSL generation is encoded by LXSS_DISTRO_FLAGS_VM_MODE (0x8). Modern
     # WSL1 registrations can legitimately use registry Version=2 and an
@@ -462,15 +477,19 @@ Invoke-Step 'import WSL1 distro' {
         ForEach-Object { Get-ItemProperty -Path $_.PSPath } |
         Where-Object { $_.DistributionName -eq $distro } |
         Select-Object -First 1
-    if (-not $registration) { throw "WSL registration for $distro was not found" }
+    if (-not $registration) {
+        winkit-json @{ event = 'wsl_import'; stage = 'registration'; distro = $distro; status = 'fail'; error = 'not found' }
+        throw "WSL registration for $distro was not found"
+    }
     if (([int]$registration.Flags -band 0x8) -ne 0) {
+        winkit-json @{ event = 'wsl_import'; stage = 'registration'; distro = $distro; status = 'fail'; flags = $registration.Flags; error = 'VM_MODE set' }
         throw "WSL1 enforcement failed for ${distro}: VM_MODE is set in Flags=$($registration.Flags)"
     }
+    winkit-json @{ event = 'wsl_import'; stage = 'registration'; distro = $distro; status = 'ok'; flags = [int]$registration.Flags }
     # wsl.exe writes benign warnings (e.g. a failed fstab pass) to stderr;
     # under ErrorActionPreference=Stop the 2>&1 redirect would promote the
     # first such line to a terminating error and fail the whole step even
     # though the import succeeded. Relax EAP around the verification call.
-    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     # Distro-agnostic liveness check: -lc so the login shell sources
     # /etc/profile. Recipe-specific verification (nix --version, os-release)
     # runs host-side after the build (wslVerifyDistro).
@@ -478,12 +497,30 @@ Invoke-Step 'import WSL1 distro' {
     # into Select-Object -First 1 closes the pipeline early, which makes
     # wsl.exe exit with a broken-pipe error code (-1) even when uname
     # succeeded.
-    $bootAll = (wsl.exe -d $distro -e /bin/sh -lc 'uname -a' 2>&1 | Out-String).Trim()
-    $bootExit = $LASTEXITCODE
+    # Retry: a freshly-imported nix distro may need a moment for the login
+    # shell to resolve (profile.d/nix.sh, PATH setup). A transient failure
+    # here used to permanently skip the s6 step, leaving the guest without
+    # rclone-mount and sshd.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $bootOk = $false
+    $bootOut = ''
+    winkit-json @{ event = 'wsl_import'; stage = 'uname_verify'; distro = $distro; status = 'start' }
+    foreach ($attempt in 1..5) {
+        $bootAll = (wsl.exe -d $distro -e /bin/sh -lc 'uname -a' 2>&1 | Out-String).Trim()
+        $bootExit = $LASTEXITCODE
+        $bootOut = ($bootAll -split "`n")[0].Trim()
+        winkit-json @{ event = 'wsl_import'; stage = 'uname_verify'; distro = $distro; attempt = $attempt; exit_code = $bootExit; output = $bootOut }
+        if ($bootExit -eq 0) { $bootOk = $true; break }
+        Send-Progress "uname attempt ${attempt}/5 exited $bootExit -- $bootOut; retrying in 10s"
+        Start-Sleep -Seconds 10
+    }
     $ErrorActionPreference = $prevEAP
-    $bootOut = ($bootAll -split "`n")[0].Trim()
-    if ($bootExit -ne 0) { throw "uname in $distro exited $bootExit -- $bootOut" }
+    if (-not $bootOk) {
+        winkit-json @{ event = 'wsl_import'; stage = 'uname_verify'; distro = $distro; status = 'fail'; attempts = 5; last_exit = $bootExit; last_output = $bootOut }
+        throw "uname in $distro failed after 5 attempts (last exit $bootExit -- $bootOut)"
+    }
     $script:distroOk = $true
+    winkit-json @{ event = 'wsl_import'; stage = 'uname_verify'; distro = $distro; status = 'ok'; attempts = $attempt; output = $bootOut }
     Send-Progress "$distro imported (WSL1 registry Flags=$($registration.Flags), VM_MODE clear): $bootOut"
 }
 
@@ -507,16 +544,25 @@ Invoke-Step 'start s6 service supervisor for WSL distro' {
     # and pipes s6-svscan stdout/stderr to the structured virtio-serial port,
     # so the host sees s6 lifecycle events in build.jsonl.
     $svc = 'C:\{{.ServiceBinaryName}}'
-    Send-Progress "winkit-service binary: $svc (exists=$(Test-Path $svc))"
-    & $svc install --name winkit-s6 --user '.\{{.Username}}' --password '{{.Password}}' --log-serial '{{.StructPort}}' --log-file 'C:\winkit-s6.log' -- wsl.exe -d $distro -u root -e /bin/s6-init
-    if ($LASTEXITCODE -ne 0) { throw "winkit-service install exited $LASTEXITCODE" }
+    $svcExists = Test-Path $svc
+    Send-Progress "winkit-service binary: $svc (exists=$svcExists)"
+    winkit-json @{ event = 's6_supervisor'; stage = 'pre_install'; binary = $svc; exists = $svcExists }
+    if (-not $svcExists) { throw "winkit-service binary not found at $svc" }
+    $installOut = & $svc install --name winkit-s6 --user '.\{{.Username}}' --password '{{.Password}}' --log-serial '{{.StructPort}}' --log-file 'C:\winkit-s6.log' -- wsl.exe -d $distro -u root -e /bin/s6-init 2>&1 | Out-String
+    $installExit = $LASTEXITCODE
+    winkit-json @{ event = 's6_supervisor'; stage = 'install'; exit_code = $installExit; output = $installOut.Trim() }
+    if ($installExit -ne 0) { throw "winkit-service install exited $installExit -- $($installOut.Trim())" }
     Send-Progress "winkit-s6 service installed"
-    & $svc start --name winkit-s6
-    if ($LASTEXITCODE -ne 0) { throw "winkit-service start exited $LASTEXITCODE" }
+    $startOut = & $svc start --name winkit-s6 2>&1 | Out-String
+    $startExit = $LASTEXITCODE
+    winkit-json @{ event = 's6_supervisor'; stage = 'start'; exit_code = $startExit; output = $startOut.Trim() }
+    if ($startExit -ne 0) { throw "winkit-service start exited $startExit -- $($startOut.Trim())" }
     Start-Sleep -Seconds 2
-    $st = & $svc status --name winkit-s6 2>&1
-    Send-Progress "winkit-s6 status after start: $st"
+    $st = & $svc status --name winkit-s6 2>&1 | Out-String
+    winkit-json @{ event = 's6_supervisor'; stage = 'status'; status_output = $st.Trim() }
+    Send-Progress "winkit-s6 status after start: $($st.Trim())"
 {{- else}}
+    winkit-json @{ event = 's6_supervisor'; stage = 'schtask_register'; status = 'start' }
     $action = New-ScheduledTaskAction -Execute 'wsl.exe' -Argument ("-d $distro -u root -e /bin/s6-init")
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $registered = $false
@@ -525,12 +571,18 @@ Invoke-Step 'start s6 service supervisor for WSL distro' {
             Register-ScheduledTask -TaskName winkit-s6 -Action $action -Trigger $trigger -User '.\{{.Username}}' -Password '{{.Password}}' -RunLevel Highest -Force | Out-Null
             $registered = $true; break
         } catch {
+            winkit-json @{ event = 's6_supervisor'; stage = 'schtask_register'; attempt = $i; error = $_.Exception.Message }
             Send-Progress "Register-ScheduledTask s6 attempt ${i}: $($_.Exception.Message)"
             Start-Sleep -Seconds 10
         }
     }
-    if (-not $registered) { throw 'Register-ScheduledTask winkit-s6 failed after 3 attempts' }
+    if (-not $registered) {
+        winkit-json @{ event = 's6_supervisor'; stage = 'schtask_register'; status = 'fail'; attempts = 3 }
+        throw 'Register-ScheduledTask winkit-s6 failed after 3 attempts'
+    }
+    winkit-json @{ event = 's6_supervisor'; stage = 'schtask_register'; status = 'ok' }
     Start-ScheduledTask -TaskName winkit-s6
+    winkit-json @{ event = 's6_supervisor'; stage = 'schtask_start'; status = 'ok' }
 {{- end}}
     Send-Progress "s6-svscan started for $distro (sshd on 127.0.0.1:2223)"
 }

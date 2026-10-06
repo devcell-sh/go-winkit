@@ -146,7 +146,7 @@ func ResolveBackend() (vm.VMBackend, string, error) {
 // with the WSL1 feature enabled in specialize and the distro imported at first
 // logon. The install uses the fastest available accelerator (HVF on Mac,
 // KVM on Linux, TCG fallback); WSL1 needs no hypervisor features.
-func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, services []s6.Service, displayType string, ports buildopts.Ports, hostname, structuredLogPath string) error {
+func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, services []s6.Service, displayType string, ports buildopts.Ports, hostname, structuredLogPath, wallpaperName string, wallpaperData []byte) error {
 	// --accel flag wins; then WINKIT_E2E_ACCEL env; then the best available
 	// accelerator for the host (HVF on Mac, KVM on Linux, TCG fallback).
 	if accel == "" {
@@ -316,6 +316,10 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	if hostname != "" {
 		cfg.Hostname = hostname
 	}
+	if wallpaperName != "" && len(wallpaperData) > 0 {
+		cfg.WallpaperName = wallpaperName
+		cfg.WallpaperData = wallpaperData
+	}
 	cfg.WSLPayloadData = wslData
 	wslWinPEAgentConfig(&cfg, virtioISO, logger)
 	if backendName == "vz" {
@@ -446,7 +450,10 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		close(stopTail)
 		return fmt.Errorf("install did not reach the gosshd provisioning channel: %w", err)
 	}
-	close(stopTail)
+	// Keep tailing: the bootstrap runs AFTER the provisioning channel comes
+	// up (gosshd is specialize-time, bootstrap is first-logon). Closing here
+	// lost every bootstrap progress message, making s6/SFTP failures opaque.
+	defer close(stopTail)
 	logger.Info("provisioning channel up (gosshd, SYSTEM)")
 
 	// --- verify: SSH + RDP; the delivered Windows OpenSSH on :22 ---

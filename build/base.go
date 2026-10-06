@@ -108,6 +108,10 @@ func baseInstallImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, wo
 	if opts.Hostname != "" {
 		cfg.Hostname = opts.Hostname
 	}
+	if opts.WallpaperName != "" && len(opts.WallpaperData) > 0 {
+		cfg.WallpaperName = opts.WallpaperName
+		cfg.WallpaperData = opts.WallpaperData
+	}
 
 	wslWinPEAgentConfig(&cfg, virtioISO, logger)
 

@@ -151,6 +151,18 @@ func wslVerifySFTP(ctx context.Context, addr, user, pass string, srv *sftpshare.
 				`C:\winkit-service.exe status --name winkit-s6 2>&1`); derr == nil {
 				logger.Warn("sftp verify: winkit-s6 service status", "status", strings.TrimSpace(string(diag)))
 			}
+			if diag, _, _, derr := sshRun(ctx, addr, user, pass,
+				`if (Test-Path C:\winkit-service.exe) { 'winkit-service.exe: EXISTS' } else { 'winkit-service.exe: MISSING' }`); derr == nil {
+				logger.Warn("sftp verify: winkit-service.exe presence", "result", strings.TrimSpace(string(diag)))
+			}
+			if diag, _, _, derr := sshRun(ctx, addr, user, pass,
+				`Get-Content C:\winkit-bootstrap.log -Tail 200 -ErrorAction SilentlyContinue`); derr == nil {
+				logger.Warn("sftp verify: bootstrap transcript tail", "log", strings.TrimSpace(string(diag)))
+			}
+			if diag, _, _, derr := sshRun(ctx, addr, user, pass,
+				`Select-String -Path C:\winkit-bootstrap.log -Pattern 'FAILED|throw|Exception|Error|exited' -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { $_.Line }`); derr == nil && len(strings.TrimSpace(string(diag))) > 0 {
+				logger.Warn("sftp verify: bootstrap errors", "matches", strings.TrimSpace(string(diag)))
+			}
 			return fmt.Errorf("guest cannot read probe through %s: (last: out=%q err=%q)", drive, lastOut, lastErr)
 		}
 		select {
