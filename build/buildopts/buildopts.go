@@ -64,6 +64,14 @@ type WSLConfig struct {
 	// a local directory, a remote flake ref, or empty for the embedded
 	// default. Ignored for non-nix images.
 	NixHome string
+	// NixHomeAttr overrides the homeConfigurations attribute name in the
+	// flake. Empty defaults to the WSL user (the embedded flake's
+	// convention). External flakes use a different naming scheme
+	// (e.g. "wsl-ultimate-aarch64" in community-home).
+	NixHomeAttr string
+	// NixHomeUser is the username the external flake's config was built
+	// for (e.g. "nixos"). Empty means it matches the WSL distro user.
+	NixHomeUser string
 	// ServicesDir is a directory laid out like an s6 scan dir (each
 	// subdirectory one service: run, optional finish, data files), baked
 	// into /etc/s6/services of the distro rootfs. Path only — the CLI
