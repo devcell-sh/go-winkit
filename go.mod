@@ -7,7 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/log v1.0.0
-	github.com/devcell-sh/go-wimlib v0.1.0
+	github.com/devcell-sh/go-wimlib v0.2.0
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/kardianos/service v1.3.0
