@@ -37,6 +37,8 @@ func (c *Config) ToBuildOpts() (*buildopts.BuildOpts, error) {
 		opts.WSL = &buildopts.WSLConfig{
 			Image:       c.WSL.Image,
 			NixHome:     c.WSL.NixHome,
+			NixHomeAttr: c.WSL.NixHomeAttr,
+			NixHomeUser: c.WSL.NixHomeUser,
 			ServicesDir: c.WSL.Services,
 		}
 	}

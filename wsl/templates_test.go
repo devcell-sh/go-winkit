@@ -39,7 +39,7 @@ func TestTemplatesCarryWSLEssentials(t *testing.T) {
 				"touch /etc/profile",
 				"COPY nixhome /etc/nixhome",
 				"ARG NIXHOME_REF",
-				"homeConfigurations.${WSL_USER}.activationPackage",
+				"homeConfigurations.${ATTR}.activationPackage",
 			},
 			forbids: []string{"mkdir -p /etc/s6/services/sshd"},
 		},

@@ -13,14 +13,14 @@ import (
 )
 
 func TestCachePathVariesWithRecipe(t *testing.T) {
-	na, _ := NixRecipe("alice", "winkit", "")
-	nb, _ := NixRecipe("bob", "winkit", "")
+	na, _ := NixRecipe("alice", "winkit", "", nil)
+	nb, _ := NixRecipe("bob", "winkit", "", nil)
 	a := cachePath("/c", na)
 	b := cachePath("/c", nb)
 	if a == b {
 		t.Fatal("cache path must vary with the distro user")
 	}
-	nref, _ := NixRecipe("alice", "winkit", "github:owner/repo")
+	nref, _ := NixRecipe("alice", "winkit", "github:owner/repo", nil)
 	if c := cachePath("/c", nref); c == a {
 		t.Fatal("cache path must vary with the nixhome source")
 	}
@@ -40,7 +40,7 @@ func TestBuildTarballCacheHit(t *testing.T) {
 	// A pre-seeded cache file + marker must satisfy BuildTarball without
 	// docker ever running.
 	dir := t.TempDir()
-	r, err := NixRecipe("alice", "winkit", "")
+	r, err := NixRecipe("alice", "winkit", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestBuildTarballWithDocker(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not on PATH")
 	}
-	r, err := NixRecipe("testdev", "winkit", "")
+	r, err := NixRecipe("testdev", "winkit", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,17 @@ ARG WSL_USER=dev
 # NIXHOME_REF, when non-empty, is a remote flake ref (git URL, github:owner/
 # repo, …) used instead of the COPY'd ./nixhome directory.
 ARG NIXHOME_REF=""
+# NIXHOME_ATTR overrides the homeConfigurations attribute name. Defaults to
+# WSL_USER so embedded flakes (which template @USER@) work unchanged.
+# External flakes (community-home) use a different naming scheme
+# (e.g. wsl-ultimate-aarch64) and pass it here.
+ARG NIXHOME_ATTR=""
+# NIXHOME_USER is the username the external flake's home-manager config was
+# built for (e.g. "nixos" for community-home WSL configs). When it differs
+# from WSL_USER, symlinks redirect the flake's paths to WSL_USER's real
+# home, so activation writes to the right place and the distro user gets
+# all the managed dotfiles.
+ARG NIXHOME_USER=""
 
 # --- WSL configuration (WSL 1: no systemd, no kernel) ---
 RUN mkdir -p /etc \
@@ -125,13 +136,24 @@ COPY nixhome /etc/nixhome
 # the distro user; the per-user profile dirs must pre-exist or HM aborts
 # with "could not find suitable profile directory". chown afterwards so
 # "home-manager switch" works as the user inside the distro.
+# Stub sudo for activation: HM hooks call sudo but the build runs as root;
+# the real binary is installed after activation from the profile.
+RUN printf '#!/bin/sh\nexec "$@"\n' > /usr/bin/sudo && chmod +x /usr/bin/sudo
+
 RUN FLAKE="${NIXHOME_REF:-path:/etc/nixhome}" \
+ && ATTR="${NIXHOME_ATTR:-${WSL_USER}}" \
+ && HM_USER="${NIXHOME_USER:-${WSL_USER}}" \
  && mkdir -p /home/${WSL_USER}/.local/state/nix/profiles \
       /nix/var/nix/profiles/per-user/${WSL_USER} \
       /nix/var/nix/gcroots/per-user/${WSL_USER} \
+ && if [ "${HM_USER}" != "${WSL_USER}" ]; then \
+      ln -sfnT /home/${WSL_USER} /home/${HM_USER}; \
+      ln -sfnT /nix/var/nix/profiles/per-user/${WSL_USER} /nix/var/nix/profiles/per-user/${HM_USER}; \
+      ln -sfnT /nix/var/nix/gcroots/per-user/${WSL_USER} /nix/var/nix/gcroots/per-user/${HM_USER}; \
+    fi \
  && chown -R 0:0 /home/${WSL_USER} \
- && ACT=$(nix build --no-link --print-out-paths "$FLAKE#homeConfigurations.${WSL_USER}.activationPackage") \
- && HOME=/home/${WSL_USER} USER=${WSL_USER} HOME_MANAGER_BACKUP_EXT=winkit-bak "$ACT/activate" \
+ && ACT=$(nix build --no-link --print-out-paths "$FLAKE#homeConfigurations.${ATTR}.activationPackage") \
+ && HOME=/home/${HM_USER} USER=${HM_USER} HOME_MANAGER_BACKUP_EXT=winkit-bak "$ACT/activate" \
  && chown -R 1000:1000 /home/${WSL_USER} \
       /nix/var/nix/profiles/per-user/${WSL_USER} \
       /nix/var/nix/gcroots/per-user/${WSL_USER}

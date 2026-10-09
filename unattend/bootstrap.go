@@ -73,6 +73,11 @@ const (
 	WinFspReleaseURL = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-" +
 		WinFspVersion + ".msi"
 
+	// WSLPackageArch is the architecture suffix of the WSL MSI shipped on
+	// the answer volume. Hardcoded to arm64: the only architecture winkit
+	// targets for full-install Windows guests.
+	WSLPackageArch = "arm64"
+
 	// RcloneMountTaskName is the scheduled task that runs the rclone mount.
 	// The shape is load-bearing (CELL-532): launched from an SSH session,
 	// rclone dies with the session and the WinFsp drive letter is per-logon;
@@ -93,6 +98,19 @@ const (
 	DefaultSFTPVolumeName = "winkit"
 	DefaultSFTPDrive      = "W"
 )
+
+// WSLPackageName returns the filename of the WSL ARM64 MSI for the pinned
+// version. It is a function (not a const) because it depends on
+// winpe.WSL1PackageVersion, which is a const in another package.
+func WSLPackageName() string {
+	return "wsl." + winpe.WSL1PackageVersion + ".0." + WSLPackageArch + ".msi"
+}
+
+// WSLReleaseURL returns the GitHub download URL for the WSL ARM64 MSI.
+func WSLReleaseURL() string {
+	return "https://github.com/microsoft/WSL/releases/download/" +
+		winpe.WSL1PackageVersion + "/" + WSLPackageName()
+}
 
 // GenerateBootstrapScript renders the first-logon bootstrap for a config.
 func GenerateBootstrapScript(cfg Config) []byte {

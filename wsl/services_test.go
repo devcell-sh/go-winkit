@@ -24,7 +24,7 @@ func TestBaseRecipeSeedsSSHD(t *testing.T) {
 }
 
 func TestNixRecipeSeedsSSHD(t *testing.T) {
-	r, err := NixRecipe("dev", "winkit", "")
+	r, err := NixRecipe("dev", "winkit", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestServiceChangesCacheKey(t *testing.T) {
 
 func TestDistroServiceOnPrebuiltErrors(t *testing.T) {
 	for _, image := range []string{"https://example.com/x.wsl", "./local.wsl"} {
-		d, err := DistroFor(image, "dev", "", "")
+		d, err := DistroFor(image, "dev", "", "", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -144,7 +144,7 @@ func TestDistroServiceOnPrebuiltErrors(t *testing.T) {
 }
 
 func TestDistroAddServiceOnRecipe(t *testing.T) {
-	d, err := DistroFor("alpine", "dev", "", "")
+	d, err := DistroFor("alpine", "dev", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
