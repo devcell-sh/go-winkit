@@ -85,7 +85,7 @@ func refBaseName(ref string) string {
 //   - "https://…/x.wsl" — published image, downloaded and cached; the
 //     publisher owns the WSL plumbing (wsl.conf, default user, …)
 //   - "./x.wsl"         — local tarball, shipped verbatim
-func DistroFor(image, user, distroName, nixHome string, nixOpts *NixHomeOpts) (Distro, error) {
+func DistroFor(image, user, distroName, nixHome string) (Distro, error) {
 	if image == "" {
 		image = "alpine"
 	}
@@ -100,7 +100,7 @@ func DistroFor(image, user, distroName, nixHome string, nixOpts *NixHomeOpts) (D
 	case image == "nix":
 		// nix needs recipe logic beyond a template: nixhome resolution
 		// and context-file assembly (see NixRecipe).
-		return fromRecipe(NixRecipe(user, distroName, nixHome, nixOpts))
+		return fromRecipe(NixRecipe(user, distroName, nixHome))
 	case strings.HasPrefix(image, "http://"), strings.HasPrefix(image, "https://"):
 		return Distro{Image: image, URL: image,
 			VerifyCommand: "uname -a", VerifyContains: "Linux"}, nil

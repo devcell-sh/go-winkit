@@ -306,12 +306,6 @@ func newBuildCmd() *cobra.Command {
 				if opts.WSL != nil {
 					buildCfg.WSLImage = opts.WSL.Image
 					buildCfg.NixHome = build.ResolveNixHome(opts.WSL.NixHome)
-					if opts.WSL.NixHomeAttr != "" || opts.WSL.NixHomeUser != "" {
-						buildCfg.NixHomeOpts = &wsl.NixHomeOpts{
-							Attr: opts.WSL.NixHomeAttr,
-							User: opts.WSL.NixHomeUser,
-						}
-					}
 					if opts.WSL.ServicesDir != "" {
 						svcs, err := s6.LoadDir(opts.WSL.ServicesDir)
 						if err != nil {

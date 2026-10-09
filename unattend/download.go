@@ -37,15 +37,6 @@ func DownloadWinFsp(ctx context.Context, cacheDir string, noCache bool) (string,
 	return downloadCached(ctx, WinFspReleaseURL, dest, noCache)
 }
 
-// DownloadWSLPackage fetches the pinned WSL ARM64 MSI to cacheDir, returning
-// the local path. Same caching contract as DownloadOpenSSH. The MSI is shipped
-// on the answer volume so the guest installs it locally instead of downloading
-// from GitHub at first logon.
-func DownloadWSLPackage(ctx context.Context, cacheDir string, noCache bool) (string, error) {
-	dest := filepath.Join(cacheDir, WSLPackageName())
-	return downloadCached(ctx, WSLReleaseURL(), dest, noCache)
-}
-
 // downloadCached fetches url to dest with a .done marker for caching.
 func downloadCached(ctx context.Context, url, dest string, noCache bool) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {

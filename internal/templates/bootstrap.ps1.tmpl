@@ -398,50 +398,27 @@ Invoke-Step 'open the firewall for SSH' {
 
 Invoke-Step 'install WSL package' {
     # On 24H2 the System32 wsl.exe is a stub: it cannot install anything.
-    # The real WSL runtime ships as an MSI. The WSL1 optional feature is
-    # enabled during specialize (EnableWSL1Feature). This step installs the
-    # user-space runtime so wsl.exe --import is available.
-    #
-    # The host may have already installed the MSI over gosshd (host-driven
-    # provisioning). Check first and skip if wsl.exe is functional.
+    # The real WSL runtime ships as an MSI from GitHub. The WSL1 optional
+    # feature is enabled during specialize (EnableWSL1Feature). This step
+    # installs the user-space runtime so wsl.exe --import is available.
+    $arch = if ([Environment]::Is64BitOperatingSystem -and [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }
+    $ver = '2.7.12'
+    $msiUrl = "https://github.com/microsoft/WSL/releases/download/$ver/wsl.$ver.0.$arch.msi"
+    $msiPath = Join-Path $env:TEMP 'wsl.msi'
+    $ProgressPreference = 'SilentlyContinue'
+    winkit-json @{ event = 'wsl_package'; stage = 'download'; url = $msiUrl }
+    Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing
+    winkit-json @{ event = 'wsl_package'; stage = 'msiexec'; status = 'start' }
+    $p = Start-Process msiexec.exe -PassThru -ArgumentList '/i', $msiPath, '/quiet', '/qn', '/norestart'
+    $p.WaitForExit(300000)
+    winkit-json @{ event = 'wsl_package'; stage = 'msiexec'; exit_code = $p.ExitCode }
+    if ($p.ExitCode -ne 0) { throw "msiexec exited $($p.ExitCode)" }
+    # wsl.exe prints UTF-16LE; WSL_UTF8=1 makes its output readable when
+    # captured (without it every log line arrives NUL-interleaved).
     $env:WSL_UTF8 = '1'
-    $existing = & wsl.exe --version 2>&1 | Select-Object -First 1
-    if ($existing -match 'WSL') {
-        winkit-json @{ event = 'wsl_package'; stage = 'verify'; version = "$existing"; source = 'host-driven' }
-        Send-Progress "WSL already installed (host-driven): $existing"
-    } else {
-{{- if .WSLPackage}}
-        # Prepackaged on the answer volume: no internet dependency.
-        $msiPath = "$vol\{{.WSLPackage}}"
-        winkit-json @{ event = 'wsl_package'; stage = 'prepackaged'; path = $msiPath }
-        if (-not (Test-Path $msiPath)) { throw "prepackaged WSL MSI not found at $msiPath" }
-        # The FAT writer cluster-aligns files; MSI is read from end, so trim.
-        $trimmed = Join-Path $env:TEMP '{{.WSLPackage}}'
-        $fs = [System.IO.File]::OpenRead($msiPath)
-        $buf = New-Object byte[] {{.WSLPackageSize}}
-        [void]$fs.Read($buf, 0, {{.WSLPackageSize}})
-        $fs.Close()
-        [System.IO.File]::WriteAllBytes($trimmed, $buf)
-        $msiPath = $trimmed
-{{- else}}
-        # Fallback: download from GitHub (requires internet).
-        $arch = if ([Environment]::Is64BitOperatingSystem -and [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }
-        $ver = '2.7.12'
-        $msiUrl = "https://github.com/microsoft/WSL/releases/download/$ver/wsl.$ver.0.$arch.msi"
-        $msiPath = Join-Path $env:TEMP 'wsl.msi'
-        $ProgressPreference = 'SilentlyContinue'
-        winkit-json @{ event = 'wsl_package'; stage = 'download'; url = $msiUrl }
-        Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing
-{{- end}}
-        winkit-json @{ event = 'wsl_package'; stage = 'msiexec'; status = 'start' }
-        $p = Start-Process msiexec.exe -PassThru -ArgumentList '/i', $msiPath, '/quiet', '/qn', '/norestart'
-        $p.WaitForExit(300000)
-        winkit-json @{ event = 'wsl_package'; stage = 'msiexec'; exit_code = $p.ExitCode }
-        if ($p.ExitCode -ne 0) { throw "msiexec exited $($p.ExitCode)" }
-        $wslVer = & wsl.exe --version 2>&1 | Select-Object -First 1
-        winkit-json @{ event = 'wsl_package'; stage = 'verify'; version = "$wslVer" }
-        Send-Progress "WSL installed: $wslVer"
-    }
+    $wslVer = & wsl.exe --version 2>&1 | Select-Object -First 1
+    winkit-json @{ event = 'wsl_package'; stage = 'verify'; version = "$wslVer" }
+    Send-Progress "WSL installed: $wslVer"
 }
 
 Invoke-Step 'import WSL1 distro' {
@@ -485,11 +462,11 @@ Invoke-Step 'import WSL1 distro' {
     # defaults or ignores a trailing --version option. This is intentionally
     # redundant with --import --version 1.
     $convertOut = (& wsl.exe --set-version $distro 1 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -and $convertOut -notmatch 'already the requested version') {
+    if ($LASTEXITCODE -ne 0) {
         winkit-json @{ event = 'wsl_import'; stage = 'set-version'; distro = $distro; status = 'fail'; exit_code = $LASTEXITCODE; output = $convertOut }
         throw "wsl --set-version $distro 1 exited $LASTEXITCODE -- $convertOut"
     }
-    winkit-json @{ event = 'wsl_import'; stage = 'set-version'; distro = $distro; status = $(if ($LASTEXITCODE -eq 0) { 'ok' } else { 'noop' }); output = $convertOut }
+    winkit-json @{ event = 'wsl_import'; stage = 'set-version'; distro = $distro; status = 'ok' }
 
     # WSL generation is encoded by LXSS_DISTRO_FLAGS_VM_MODE (0x8). Modern
     # WSL1 registrations can legitimately use registry Version=2 and an

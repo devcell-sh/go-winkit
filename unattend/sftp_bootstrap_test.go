@@ -112,9 +112,8 @@ func TestGenerateBootstrapScript_SFTPFailureIsNonFatal(t *testing.T) {
 		"SFTP mount is not wrapped in Invoke-Step")
 }
 
-// The WSL1 rootfs ships as distro.wsl on the scratch FAT volume (not the
-// ISO): the WSL service's RegisterDistro cannot read from a CD-ROM filesystem
-// (0xd000000d). The bootstrap's drive scan finds it by letter probe.
+// The WSL1 rootfs ships as distro.wsl (byte-exact gzip) so the bootstrap's
+// drive scan finds it on the answer volume and imports it at first logon.
 func TestBuildAnswerVolume_ShipsWSL(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.WSLPayloadData = []byte("\x1f\x8b fake gzip tarball")
@@ -123,28 +122,11 @@ func TestBuildAnswerVolume_ShipsWSL(t *testing.T) {
 	scratchPath := filepath.Join(td, "winkit-scratch.img")
 	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
 
-	got, err := isokit.ReadFileFromFAT(scratchPath, "/distro.wsl")
-	require.NoError(t, err, "distro.wsl must ship on the scratch FAT volume")
+	got, err := isokit.ReadFileFromISO(isoPath, "/distro.wsl")
+	require.NoError(t, err, "distro.wsl must ship on the ISO")
+	// ISO files are byte-exact (no cluster padding).
 	assert.Equal(t, cfg.WSLPayloadData, got,
 		"distro.wsl content must match")
-}
-
-// The WSL MSI ships on the answer ISO (not the scratch FAT): it is a
-// read-only payload that does not need guest-writable access.
-func TestBuildAnswerVolume_ShipsWSLPackage(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.WSLPackage = "wsl.2.7.12.0.arm64.msi"
-	cfg.WSLPackageData = []byte("fake MSI content for testing")
-	cfg.WSLPackageSize = len(cfg.WSLPackageData)
-	td := t.TempDir()
-	isoPath := filepath.Join(td, "autounattend.iso")
-	scratchPath := filepath.Join(td, "winkit-scratch.img")
-	require.NoError(t, BuildAnswerVolume(cfg, isoPath, scratchPath))
-
-	got, err := isokit.ReadFileFromISO(isoPath, "/"+cfg.WSLPackage)
-	require.NoError(t, err, "WSL MSI must ship on the answer ISO")
-	assert.Equal(t, cfg.WSLPackageData, got,
-		"WSL MSI content must match")
 }
 
 // Both payloads must ship byte-exact: an MSI's signature and a zip's

@@ -53,10 +53,6 @@ type WSLConfig struct {
 	// homeConfigurations.<user>), a remote flake ref (github:org/repo,
 	// git+https://...), or empty for the embedded default.
 	NixHome string `yaml:"nixhome"`
-	// NixHomeAttr overrides the homeConfigurations attribute name.
-	NixHomeAttr string `yaml:"nixhome_attr"`
-	// NixHomeUser is the username the flake's config was built for.
-	NixHomeUser string `yaml:"nixhome_user"`
 	// Services is a path to a directory of s6 service dirs (a standard
 	// s6 scan dir layout: <dir>/<name>/run), copied verbatim into
 	// /etc/s6/services of the distro. A subdir named like a built-in

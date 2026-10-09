@@ -54,32 +54,13 @@ func IsFlakeRef(nixHome string) bool {
 		strings.HasPrefix(nixHome, "flake:")
 }
 
-// NixHomeOpts controls external-flake attribute resolution for NixRecipe.
-// When a non-embedded nixhome flake uses a different homeConfigurations
-// attribute name (e.g. "wsl-ultimate-aarch64") or a different user than
-// the WSL distro user, set these so the Dockerfile's activation finds the
-// right attribute and redirects paths via symlinks.
-type NixHomeOpts struct {
-	// Attr is the homeConfigurations attribute name. Empty defaults to the
-	// WSL_USER build arg (the distro user), which is what the embedded
-	// flake uses. External flakes (community-home) use a naming scheme
-	// like "wsl-<stack>-<arch>".
-	Attr string
-	// User is the username the external flake's config was built for
-	// (e.g. "nixos"). Empty means it matches the WSL distro user and no
-	// path redirection is needed.
-	User string
-}
-
 // NixRecipe builds the nix image recipe. nixHome selects the home-manager
 // configuration baked into the rootfs: empty for the embedded default
 // flake, a local directory (must contain a flake exposing
 // homeConfigurations.<user>), or a remote flake ref (git+https://…,
 // github:owner/repo, …). The CLI feeds this from --nixhome /
-// WINKIT_NIXHOME; library callers pass it directly. opts overrides the
-// flake attribute name and user when they differ from the distro user;
-// pass nil to use defaults.
-func NixRecipe(user, distroName, nixHome string, opts *NixHomeOpts) (Recipe, error) {
+// WINKIT_NIXHOME; library callers pass it directly.
+func NixRecipe(user, distroName, nixHome string) (Recipe, error) {
 	if distroName == "" {
 		distroName = "winkit"
 	}
@@ -129,19 +110,6 @@ func NixRecipe(user, distroName, nixHome string, opts *NixHomeOpts) (Recipe, err
 			r.ContextFiles[k] = v
 		}
 	}
-
-	if opts != nil {
-		if r.BuildArgs == nil {
-			r.BuildArgs = map[string]string{}
-		}
-		if opts.Attr != "" {
-			r.BuildArgs["NIXHOME_ATTR"] = opts.Attr
-		}
-		if opts.User != "" {
-			r.BuildArgs["NIXHOME_USER"] = opts.User
-		}
-	}
-
 	return r, nil
 }
 

@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devcell-sh/go-winkit/build/buildopts"
 	"github.com/devcell-sh/go-winkit/cache"
 	"github.com/devcell-sh/go-winkit/internal/testutil"
 	"github.com/devcell-sh/go-winkit/vm/qemu"
@@ -171,7 +170,7 @@ func TestQcowBuilderWSL(t *testing.T) {
 	// buildWSLImage internally asserts every phase and returns an error if any
 	// fails: waitForWindowsSSH (whoami), wslVerify (SSH + RDP port reachable).
 	// A nil return therefore means all of those passed.
-	buildErr := wslImage(ctx, dest, cacheDir, winISO, virtioISO, workDir, logger, false, "", os.Getenv("WINKIT_E2E_WSL_IMAGE"), ResolveNixHome(""), nil, nil, "", buildopts.Ports{}, "", "", "", nil)
+	buildErr := wslImage(ctx, dest, cacheDir, winISO, virtioISO, workDir, logger, false, "", os.Getenv("WINKIT_E2E_WSL_IMAGE"), ResolveNixHome(""), nil, "")
 	close(stopShots)
 	<-shotsDone
 

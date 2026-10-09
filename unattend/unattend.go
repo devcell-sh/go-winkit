@@ -125,17 +125,6 @@ type Config struct {
 	// WSL1 distro' step scans attached drives for the name and imports
 	// it under DistroName. See the wsl package for how it is built.
 	WSLPayloadData []byte
-	// WSLPackage is the filename of the WSL ARM64 MSI shipped on the answer
-	// volume (e.g. "wsl.2.7.12.0.arm64.msi"). When set with WSLPackageData,
-	// the bootstrap installs it from the answer volume instead of
-	// downloading from GitHub. Ships byte-exact: trailing padding would
-	// break the MSI's digital signature.
-	WSLPackage string
-	// WSLPackageData is the WSL MSI bytes, written to the answer volume.
-	WSLPackageData []byte
-	// WSLPackageSize is the MSI's true length (see OpenSSHPayloadSize for
-	// the FAT padding rationale).
-	WSLPackageSize int
 	// EnableWSL1Feature adds a specialize dism command that enables the
 	// Microsoft-Windows-Subsystem-Linux optional feature (lxcore.sys).
 	// WSL1 distros cannot register without it — wsl --import --version 1
@@ -1164,9 +1153,6 @@ func BuildAnswerVolume(cfg Config, isoPath, scratchPath string) error {
 	}
 	if cfg.WinFspPayload != "" && len(cfg.WinFspPayloadData) > 0 {
 		isoFiles["/"+cfg.WinFspPayload] = cfg.WinFspPayloadData
-	}
-	if cfg.WSLPackage != "" && len(cfg.WSLPackageData) > 0 {
-		isoFiles["/"+cfg.WSLPackage] = cfg.WSLPackageData
 	}
 	// WSL tarball goes on the scratch FAT, not the ISO: the WSL service's
 	// RegisterDistro cannot read from a CD-ROM filesystem (0xd000000d).

@@ -27,7 +27,7 @@ func TestDistroFor(t *testing.T) {
 		{"ubuntu", true},
 	}
 	for _, c := range cases {
-		d, err := DistroFor(c.image, "dev", "winkit", "", nil)
+		d, err := DistroFor(c.image, "dev", "winkit", "")
 		if err != nil {
 			t.Fatalf("DistroFor(%q): %v", c.image, err)
 		}
@@ -38,7 +38,7 @@ func TestDistroFor(t *testing.T) {
 			t.Errorf("DistroFor(%q) must carry a verify command", c.image)
 		}
 	}
-	if _, err := DistroFor("not a ref", "dev", "winkit", "", nil); err == nil {
+	if _, err := DistroFor("not a ref", "dev", "winkit", ""); err == nil {
 		t.Error("an image value with spaces must error")
 	}
 }
@@ -47,7 +47,7 @@ func TestDistroFor(t *testing.T) {
 // known base names get distro-specific verify commands, unknown ones the
 // generic Linux check.
 func TestDistroForDockerRefs(t *testing.T) {
-	alp, err := DistroFor("", "dev", "winkit", "", nil)
+	alp, err := DistroFor("", "dev", "winkit", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestDistroForDockerRefs(t *testing.T) {
 		t.Errorf("alpine verify must check os-release, got %q", alp.VerifyContains)
 	}
 
-	deb, err := DistroFor("debian:12", "dev", "winkit", "", nil)
+	deb, err := DistroFor("debian:12", "dev", "winkit", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestDistroForDockerRefs(t *testing.T) {
 		t.Errorf("debian verify must check os-release, got %q", deb.VerifyContains)
 	}
 
-	custom, err := DistroFor("ghcr.io/org/img:tag", "dev", "winkit", "", nil)
+	custom, err := DistroFor("ghcr.io/org/img:tag", "dev", "winkit", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestDistroMaterializeURL(t *testing.T) {
 	defer srv.Close()
 
 	cacheDir := t.TempDir()
-	d, err := DistroFor(srv.URL+"/rootfs.wsl", "dev", "winkit", "", nil)
+	d, err := DistroFor(srv.URL+"/rootfs.wsl", "dev", "winkit", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestDistroMaterializeURL(t *testing.T) {
 func TestDistroMaterializeURLHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
-	d, _ := DistroFor(srv.URL+"/missing.wsl", "dev", "winkit", "", nil)
+	d, _ := DistroFor(srv.URL+"/missing.wsl", "dev", "winkit", "")
 	if _, err := d.Materialize(context.Background(), t.TempDir(), false, t.Logf); err == nil {
 		t.Fatal("HTTP 404 must fail materialization, not cache an error page")
 	}
@@ -184,7 +184,7 @@ func TestDistroMaterializeLocalPath(t *testing.T) {
 	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	d, err := DistroFor(p, "dev", "winkit", "", nil)
+	d, err := DistroFor(p, "dev", "winkit", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestDistroMaterializeLocalPath(t *testing.T) {
 		t.Fatalf("local path must materialize to itself: got %q, %v", got, err)
 	}
 
-	d2, _ := DistroFor(filepath.Join(dir, "absent.wsl"), "dev", "winkit", "", nil)
+	d2, _ := DistroFor(filepath.Join(dir, "absent.wsl"), "dev", "winkit", "")
 	if _, err := d2.Materialize(context.Background(), t.TempDir(), false, t.Logf); err == nil {
 		t.Fatal("missing local tarball must error")
 	}

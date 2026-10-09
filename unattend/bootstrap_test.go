@@ -420,55 +420,6 @@ func TestGenerateBootstrapScript_NetworkCheckIsComprehensive(t *testing.T) {
 	}
 }
 
-func TestWSLPackageName_MatchesPEVersion(t *testing.T) {
-	name := WSLPackageName()
-	assert.Contains(t, name, winpe.WSL1PackageVersion,
-		"WSL package name must use the same version as PE")
-	assert.Contains(t, name, WSLPackageArch,
-		"WSL package name must include the target arch")
-	assert.True(t, strings.HasSuffix(name, ".msi"),
-		"WSL package must be an MSI")
-}
-
-func TestWSLReleaseURL_PointsToGitHubRelease(t *testing.T) {
-	url := WSLReleaseURL()
-	assert.Contains(t, url, "github.com/microsoft/WSL/releases",
-		"must point to the official WSL GitHub releases")
-	assert.Contains(t, url, winpe.WSL1PackageVersion,
-		"URL must reference the pinned version")
-	assert.True(t, strings.HasSuffix(url, WSLPackageName()),
-		"URL must end with the MSI filename")
-}
-
-// When WSLPackage is set, the bootstrap installs from the answer volume
-// instead of downloading from GitHub.
-func TestGenerateBootstrapScript_WSLPackageFromAnswerVolume(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.WSLPackage = "wsl.2.7.12.0.arm64.msi"
-	cfg.WSLPackageSize = 12345
-	ps1 := string(GenerateBootstrapScript(cfg))
-
-	assert.Contains(t, ps1, cfg.WSLPackage,
-		"prepackaged MSI filename must appear in the bootstrap")
-	assert.NotContains(t, ps1, "Invoke-WebRequest",
-		"prepackaged path must not download from the internet")
-	assert.Contains(t, ps1, "host-driven",
-		"bootstrap must detect and skip when the host already installed WSL")
-}
-
-// Without WSLPackage, the bootstrap falls back to downloading from GitHub.
-func TestGenerateBootstrapScript_WSLPackageFallbackDownload(t *testing.T) {
-	cfg := DefaultConfig()
-	ps1 := string(GenerateBootstrapScript(cfg))
-
-	assert.Contains(t, ps1, "Invoke-WebRequest",
-		"fallback path must download from GitHub")
-	assert.Contains(t, ps1, "github.com/microsoft/WSL/releases",
-		"download URL must point to the official WSL releases")
-	assert.Contains(t, ps1, "host-driven",
-		"bootstrap must still check for host-driven WSL install before downloading")
-}
-
 // The network check must fail the step (throw) when no adapter is up or no IP
 // is assigned — a diagnostic-only report lets the build continue into OpenSSH
 // install which will fail anyway, wasting time and producing a confusing error.

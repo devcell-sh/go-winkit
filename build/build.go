@@ -16,7 +16,6 @@ import (
 	"github.com/devcell-sh/go-winkit/build/buildopts"
 	"github.com/devcell-sh/go-winkit/s6"
 	"github.com/devcell-sh/go-winkit/winpe"
-	"github.com/devcell-sh/go-winkit/wsl"
 )
 
 // wimlibAvailable is a seam for tests; the binding's answer is fixed at
@@ -51,9 +50,6 @@ type Config struct {
 	WSLImage string
 	// NixHome selects the home-manager config for WSLImage=nix.
 	NixHome string
-	// NixHomeOpts overrides the flake attribute name and user when the
-	// external flake uses a different naming scheme (e.g. community-home).
-	NixHomeOpts *wsl.NixHomeOpts
 	// WSLServices are extra s6 services baked into the distro rootfs and
 	// supervised by the boot-time s6-svscan loop. Docker-built WSLImage
 	// values only (a docker ref or nix); URL/tarball images fail the
@@ -98,7 +94,7 @@ func WSL(ctx context.Context, c Config) error {
 		wallpaperData = c.Opts.WallpaperData
 	}
 	return wslImage(ctx, c.Dest, c.CacheDir, c.WindowsISO, c.VirtIOISO, c.WorkDir,
-		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.NixHomeOpts, c.WSLServices, c.DisplayType, ports, hostname, c.StructuredLogPath, wallpaperName, wallpaperData)
+		c.logger(), c.NoCache, c.Accel, c.WSLImage, c.NixHome, c.WSLServices, c.DisplayType, ports, hostname, c.StructuredLogPath, wallpaperName, wallpaperData)
 }
 
 // Base performs a full unattended install running the hooks and features

@@ -239,7 +239,7 @@ func PE(ctx context.Context, c Config) error {
 	if image == "" {
 		image = c.Opts.WSL.Image
 	}
-	distro, err := wsl.DistroFor(image, winpe.WSL1PEUserName, winpe.WSL1PEDistroName, c.NixHome, c.NixHomeOpts)
+	distro, err := wsl.DistroFor(image, winpe.WSL1PEUserName, winpe.WSL1PEDistroName, c.NixHome)
 	if err != nil {
 		return err
 	}

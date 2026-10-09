@@ -146,7 +146,7 @@ func ResolveBackend() (vm.VMBackend, string, error) {
 // with the WSL1 feature enabled in specialize and the distro imported at first
 // logon. The install uses the fastest available accelerator (HVF on Mac,
 // KVM on Linux, TCG fallback); WSL1 needs no hypervisor features.
-func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, nixOpts *wsl.NixHomeOpts, services []s6.Service, displayType string, ports buildopts.Ports, hostname, structuredLogPath, wallpaperName string, wallpaperData []byte) error {
+func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir string, logger *slog.Logger, noCache bool, accel, wslImageName, nixHome string, services []s6.Service, displayType string, ports buildopts.Ports, hostname, structuredLogPath, wallpaperName string, wallpaperData []byte) error {
 	// --accel flag wins; then WINKIT_E2E_ACCEL env; then the best available
 	// accelerator for the host (HVF on Mac, KVM on Linux, TCG fallback).
 	if accel == "" {
@@ -212,7 +212,7 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	// needs no nested virtualization, so this is part of every image.
 	// A host without docker still produces a working image, just without
 	// the preloaded distro (the bootstrap step logs "no distro.wsl" and skips).
-	distro, err := wsl.DistroFor(wslImageName, unattend.SessionUsername(), unattend.DefaultConfig().DistroName, nixHome, nixOpts)
+	distro, err := wsl.DistroFor(wslImageName, unattend.SessionUsername(), unattend.DefaultConfig().DistroName, nixHome)
 	if err != nil {
 		return err
 	}
@@ -310,19 +310,6 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		return fmt.Errorf("reading winkit-service binary: %w", err)
 	}
 
-	// WSL runtime MSI: prepackaged on the answer volume so the guest needs
-	// no internet to install wsl.exe. The PE builder already caches the same
-	// version for WIM patching; the full-install path ships the MSI as-is.
-	logger.Info("fetching WSL runtime MSI payload")
-	wslMSIPath, err := unattend.DownloadWSLPackage(ctx, cacheDir, noCache)
-	if err != nil {
-		return fmt.Errorf("fetching WSL package: %w", err)
-	}
-	wslMSIData, err := os.ReadFile(wslMSIPath)
-	if err != nil {
-		return fmt.Errorf("reading WSL package: %w", err)
-	}
-
 	cfg := wslAnswerConfig(pwshFiles, filepath.Base(opensshZip), opensshData, "gosshd.exe", gosshdData)
 	cfg.ServiceBinaryName = "winkit-service.exe"
 	cfg.ServiceBinaryData = serviceData
@@ -334,9 +321,6 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 		cfg.WallpaperData = wallpaperData
 	}
 	cfg.WSLPayloadData = wslData
-	cfg.WSLPackage = unattend.WSLPackageName()
-	cfg.WSLPackageData = wslMSIData
-	cfg.WSLPackageSize = len(wslMSIData)
 	wslWinPEAgentConfig(&cfg, virtioISO, logger)
 	if backendName == "vz" {
 		cfg.GosshdVsockPort = vzGosshdVsockPort()
@@ -471,25 +455,6 @@ func wslImage(ctx context.Context, dest, cacheDir, winISO, virtioISO, workDir st
 	// lost every bootstrap progress message, making s6/SFTP failures opaque.
 	defer close(stopTail)
 	logger.Info("provisioning channel up (gosshd, SYSTEM)")
-
-	// --- provision: host-driven build-time steps over gosshd (SYSTEM) ---
-	// These run as SYSTEM via the provisioning channel, so they have full
-	// elevation. The bootstrap is running in parallel (first-logon), but
-	// these steps are idempotent: the bootstrap's versions become no-ops
-	// when the host has already done the work.
-
-	// Force-install vioserial driver for structured telemetry. specialize
-	// staged it with pnputil /add-driver (no /install) so PnP would
-	// auto-install on the OOBE boot, but PnP may not match the device on
-	// its own (empirically: 30+ error devices, vioserial among them).
-	// Force-installing after OOBE is safe (no reboot loop).
-	wslProvisionVioSerial(ctx, provAddr, provUser, provPass, logger)
-
-	// Install the WSL runtime MSI from the answer volume. The MSI is
-	// prepackaged (no internet needed) and this runs as SYSTEM, which the
-	// msiexec requires. The bootstrap carries an identical step as fallback,
-	// but host-driven is deterministic and observable.
-	wslProvisionWSLRuntime(ctx, provAddr, provUser, provPass, logger)
 
 	// --- verify: SSH + RDP; the delivered Windows OpenSSH on :22 ---
 	osshAddr := fmt.Sprintf("127.0.0.1:%d", ports.OpenSSHOrDefault())
@@ -647,61 +612,6 @@ func wsl1RegistrationProbe(distro string) string {
 // NULs recovers the ASCII text either way.
 func decodeWSLOutput(b []byte) string {
 	return strings.ReplaceAll(string(b), "\x00", "")
-}
-
-// wslProvisionVioSerial force-installs the vioserial driver over the gosshd
-// provisioning channel. Best-effort: a missing driver (e.g. ARM64 vioserial
-// not on the virtio ISO) logs a warning; a successful install enables the
-// virtio-serial structured log channel for the rest of the build.
-func wslProvisionVioSerial(ctx context.Context, addr, user, pass string, logger interface {
-	Info(string, ...any)
-	Warn(string, ...any)
-}) {
-	logger.Info("force-installing vioserial driver for structured telemetry")
-	// The virtio-win CD is still attached. Scan for the INF and install it.
-	// /install forces PnP enumeration on a running system (safe after OOBE,
-	// unlike during specialize where it caused a reboot loop).
-	out, errb, code, err := sshRun(ctx, addr, user, pass,
-		`cmd /c "for %d in (C D E F G H I J K L) do @if exist %d:\vioserial\w11\ARM64\vioser.inf pnputil /add-driver %d:\vioserial\w11\ARM64\vioser.inf /install"`)
-	if err != nil || code != 0 {
-		logger.Warn("vioserial force-install failed (non-fatal, telemetry may be unavailable)",
-			"code", code, "err", fmt.Sprint(err),
-			"stdout", strings.TrimSpace(string(out)),
-			"stderr", strings.TrimSpace(string(errb)))
-		return
-	}
-	logger.Info("vioserial driver installed", "output", strings.TrimSpace(string(out)))
-}
-
-// wslProvisionWSLRuntime installs the WSL MSI from the answer volume over the
-// gosshd provisioning channel (SYSTEM). The bootstrap's "install WSL package"
-// step is the fallback: it checks wsl.exe --version first and skips the
-// msiexec when the runtime is already installed.
-func wslProvisionWSLRuntime(ctx context.Context, addr, user, pass string, logger interface {
-	Info(string, ...any)
-	Warn(string, ...any)
-}) {
-	logger.Info("installing WSL runtime from answer volume (host-driven)")
-	// Locate the answer volume by its autounattend.xml marker, then install
-	// the prepackaged MSI. The FAT writer cluster-aligns files, but msiexec
-	// reads MSIs from the start, so trailing padding is harmless for it.
-	cmd := `$vol = $null; foreach ($d in (Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter })) { if (Test-Path ("{0}:\autounattend.xml" -f $d.DriveLetter) -ErrorAction SilentlyContinue) { $vol = "{0}:" -f $d.DriveLetter; break } }; ` +
-		`if (-not $vol) { Write-Error 'answer volume not found'; exit 1 }; ` +
-		`$msi = Get-ChildItem "$vol\wsl.*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1; ` +
-		`if (-not $msi) { Write-Error 'WSL MSI not found on answer volume'; exit 1 }; ` +
-		`Write-Output "installing $($msi.Name) from $vol"; ` +
-		`$p = Start-Process msiexec.exe -PassThru -Wait -ArgumentList '/i', $msi.FullName, '/quiet', '/qn', '/norestart'; ` +
-		`if ($p.ExitCode -ne 0) { Write-Error "msiexec exited $($p.ExitCode)"; exit 1 }; ` +
-		`$env:WSL_UTF8 = '1'; $ver = (& wsl.exe --version 2>&1 | Select-Object -First 1); Write-Output "WSL installed: $ver"`
-	out, errb, code, err := sshRun(ctx, addr, user, pass, cmd)
-	if err != nil || code != 0 {
-		logger.Warn("host-driven WSL install failed (bootstrap will retry)",
-			"code", code, "err", fmt.Sprint(err),
-			"stdout", strings.TrimSpace(string(out)),
-			"stderr", strings.TrimSpace(string(errb)))
-		return
-	}
-	logger.Info("WSL runtime installed (host-driven)", "output", strings.TrimSpace(string(out)))
 }
 
 // wslVerify confirms SSH + RDP are reachable.

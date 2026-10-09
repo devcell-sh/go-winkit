@@ -12,12 +12,16 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 )
 
 // VolumeName is the filename the bootstrap's drive scan looks for.
@@ -141,9 +145,14 @@ func BuildTarball(ctx context.Context, cacheDir string, r Recipe, noCache bool, 
 	containerID := strings.TrimRight(string(createOut), "\r\n")
 	defer exec.Command("docker", "rm", containerID).Run()
 
-	logf("wsl: docker export | gzip …")
+	exportSize := estimateExportSize(ctx, tag)
+	if exportSize > 0 {
+		logf("wsl: docker export | gzip (~%.1f GB) …", float64(exportSize)/(1<<30))
+	} else {
+		logf("wsl: docker export | gzip …")
+	}
 	tmp := dest + ".part"
-	if err := exportGzip(ctx, containerID, tmp); err != nil {
+	if err := exportGzip(ctx, containerID, tmp, exportSize, logf); err != nil {
 		os.Remove(tmp)
 		return "", fmt.Errorf("wsl: export: %w", err)
 	}
@@ -158,7 +167,7 @@ func BuildTarball(ctx context.Context, cacheDir string, r Recipe, noCache bool, 
 	return dest, nil
 }
 
-func exportGzip(ctx context.Context, containerID, outPath string) error {
+func exportGzip(ctx context.Context, containerID, outPath string, exportSize int64, logf func(string, ...any)) error {
 	out, err := os.Create(outPath)
 	if err != nil {
 		return err
@@ -166,9 +175,35 @@ func exportGzip(ctx context.Context, containerID, outPath string) error {
 	defer out.Close()
 
 	gw := gzip.NewWriter(out)
+
+	var cw *countingWriter
 	export := exec.CommandContext(ctx, "docker", "export", containerID)
-	export.Stdout = gw
+	if exportSize > 0 {
+		cw = &countingWriter{w: gw}
+		export.Stdout = cw
+
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			t := time.NewTicker(10 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-t.C:
+					n := cw.N()
+					pct := min(float64(n)*100/float64(exportSize), 99)
+					logf("wsl: export %3.0f%% (%d / ~%d MB)",
+						pct, n>>20, exportSize>>20)
+				}
+			}
+		}()
+	} else {
+		export.Stdout = gw
+	}
 	export.Stderr = os.Stderr
+
 	if err := export.Run(); err != nil {
 		return err
 	}
@@ -176,4 +211,34 @@ func exportGzip(ctx context.Context, containerID, outPath string) error {
 		return err
 	}
 	return out.Close()
+}
+
+type countingWriter struct {
+	w io.Writer
+	n atomic.Int64
+}
+
+func (cw *countingWriter) Write(p []byte) (int, error) {
+	n, err := cw.w.Write(p)
+	cw.n.Add(int64(n))
+	return n, err
+}
+
+func (cw *countingWriter) N() int64 { return cw.n.Load() }
+
+// estimateExportSize approximates the uncompressed `docker export` stream
+// size from the image's compressed layer size. Docker stores layers
+// gzip-compressed; the image .Size field is that compressed total.
+// `docker export` streams the flattened, uncompressed filesystem, which
+// is typically ~2x the compressed size for Linux rootfs images.
+func estimateExportSize(ctx context.Context, tag string) int64 {
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect", tag).Output()
+	if err != nil {
+		return 0
+	}
+	var imgs []struct{ Size int64 }
+	if json.Unmarshal(out, &imgs) != nil || len(imgs) == 0 {
+		return 0
+	}
+	return imgs[0].Size * 2
 }
